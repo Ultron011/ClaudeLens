@@ -1120,6 +1120,51 @@ var init_status = __esm({
   }
 });
 
+// src/update.ts
+var update_exports = {};
+__export(update_exports, {
+  runUpdate: () => runUpdate
+});
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname as dirname2, resolve as resolve3, join as join3 } from "node:path";
+import { fileURLToPath } from "node:url";
+function run(cmd2, args, cwd) {
+  const r2 = spawnSync(cmd2, args, { cwd, stdio: "inherit" });
+  return r2.status === 0;
+}
+async function runUpdate() {
+  const bundle = fileURLToPath(import.meta.url);
+  const repo = resolve3(dirname2(bundle), "..", "..");
+  if (!existsSync(join3(repo, ".git"))) {
+    console.error(import_picocolors6.default.red(`Can't find the ClaudeLens git clone at ${repo}.`));
+    console.error(
+      "Update from your clone (where you ran `claudelens install`), or reinstall the plugin in Claude Code."
+    );
+    process.exit(1);
+  }
+  console.log(import_picocolors6.default.dim(`Updating ClaudeLens in ${repo}
+`));
+  if (!run("git", ["-C", repo, "pull", "--ff-only"], repo)) {
+    console.error(import_picocolors6.default.red("\ngit pull failed \u2014 resolve it in the repo, then retry."));
+    process.exit(1);
+  }
+  console.log(import_picocolors6.default.dim("\nRebuilding bundle\u2026"));
+  const built = run("pnpm", ["--filter", "@claudelens/cli", "build:plugin"], repo);
+  if (!built) {
+    console.log(import_picocolors6.default.yellow("(skipped rebuild \u2014 using the committed bundle from the pull)"));
+  }
+  console.log(import_picocolors6.default.green("\n\u2714 Updated."));
+  console.log(import_picocolors6.default.dim("Takes effect on the next turn / command \u2014 no plugin reinstall needed."));
+}
+var import_picocolors6;
+var init_update = __esm({
+  "src/update.ts"() {
+    "use strict";
+    import_picocolors6 = __toESM(require_picocolors(), 1);
+  }
+});
+
 // src/install.ts
 var install_exports = {};
 __export(install_exports, {
@@ -1127,38 +1172,38 @@ __export(install_exports, {
 });
 import { chmod, mkdir, writeFile as writeFile2 } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import { join as join3 } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join as join4 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
 async function runInstall() {
-  const bundle = fileURLToPath(import.meta.url);
-  const binDir = join3(homedir3(), ".local", "bin");
-  const wrapper = join3(binDir, "claudelens");
+  const bundle = fileURLToPath2(import.meta.url);
+  const binDir = join4(homedir3(), ".local", "bin");
+  const wrapper = join4(binDir, "claudelens");
   await mkdir(binDir, { recursive: true });
   await writeFile2(wrapper, `#!/bin/sh
 exec node "${bundle}" "$@"
 `, "utf8");
   await chmod(wrapper, 493);
-  console.log(import_picocolors6.default.green(`
+  console.log(import_picocolors7.default.green(`
   Installed  ${wrapper}`));
-  console.log(import_picocolors6.default.dim(`  runs       node ${bundle}
+  console.log(import_picocolors7.default.dim(`  runs       node ${bundle}
 `));
   const onPath = (process.env.PATH ?? "").split(":").includes(binDir);
   if (onPath) {
-    console.log(`  Try it:  ${import_picocolors6.default.cyan("claudelens setup")}
+    console.log(`  Try it:  ${import_picocolors7.default.cyan("claudelens setup")}
 `);
   } else {
-    console.log(import_picocolors6.default.yellow(`  \u26A0  ${binDir} is not on your PATH. Add it:`));
-    console.log(`     ${import_picocolors6.default.cyan(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)}
+    console.log(import_picocolors7.default.yellow(`  \u26A0  ${binDir} is not on your PATH. Add it:`));
+    console.log(`     ${import_picocolors7.default.cyan(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)}
 `);
   }
-  console.log(import_picocolors6.default.dim(`  To update later: 'git pull' in the ClaudeLens repo \u2014 the command tracks this bundle.
+  console.log(import_picocolors7.default.dim(`  To update later: 'git pull' in the ClaudeLens repo \u2014 the command tracks this bundle.
 `));
 }
-var import_picocolors6;
+var import_picocolors7;
 var init_install = __esm({
   "src/install.ts"() {
     "use strict";
-    import_picocolors6 = __toESM(require_picocolors(), 1);
+    import_picocolors7 = __toESM(require_picocolors(), 1);
   }
 });
 
@@ -1425,7 +1470,7 @@ __export(index_exports, {
 });
 import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
 import { homedir as homedir4, userInfo as userInfo2 } from "node:os";
-import { join as join4 } from "node:path";
+import { join as join5 } from "node:path";
 async function collectSessions() {
   let projectDirs;
   try {
@@ -1435,7 +1480,7 @@ async function collectSessions() {
   }
   const out = [];
   for (const dir of projectDirs) {
-    const full = join4(PROJECTS_DIR2, dir);
+    const full = join5(PROJECTS_DIR2, dir);
     let files;
     try {
       files = await readdir2(full);
@@ -1444,7 +1489,7 @@ async function collectSessions() {
     }
     for (const f2 of files) {
       if (!f2.endsWith(".jsonl")) continue;
-      const path = join4(full, f2);
+      const path = join5(full, f2);
       try {
         const st = await stat(path);
         const raw = await readFile3(path, "utf8");
@@ -1462,14 +1507,14 @@ function fmtCost(n) {
 }
 async function runPublish() {
   console.clear();
-  oe(import_picocolors7.default.bgCyan(import_picocolors7.default.black(" ClaudeLens ")) + import_picocolors7.default.dim(" share a session so your team can learn"));
+  oe(import_picocolors8.default.bgCyan(import_picocolors8.default.black(" ClaudeLens ")) + import_picocolors8.default.dim(" share a session so your team can learn"));
   const candidates = await collectSessions();
   if (!candidates.length) {
     ue(`No Claude Code sessions found in ${PROJECTS_DIR2}`);
     process.exit(1);
   }
   const picked = await ie({
-    message: `Pick a session to share  ${import_picocolors7.default.dim("(server: " + SERVER + ")")}`,
+    message: `Pick a session to share  ${import_picocolors8.default.dim("(server: " + SERVER + ")")}`,
     options: candidates.slice(0, 40).map((c2, i) => {
       const s2 = c2.session;
       const when = new Date(c2.mtime).toLocaleString();
@@ -1493,17 +1538,17 @@ async function runPublish() {
   const hitEntries = Object.entries(hits);
   le(
     [
-      `${import_picocolors7.default.bold("Title")}    ${s.title}`,
-      `${import_picocolors7.default.bold("Project")}  ${s.project ?? "\u2014"}  (branch: ${s.gitBranch ?? "\u2014"})`,
-      `${import_picocolors7.default.bold("Turns")}    ${s.stats.turns}  \xB7  models: ${s.stats.models.join(", ") || "\u2014"}`,
-      `${import_picocolors7.default.bold("Tokens")}   ${s.stats.totalTokens.toLocaleString()}  (~${fmtCost(
+      `${import_picocolors8.default.bold("Title")}    ${s.title}`,
+      `${import_picocolors8.default.bold("Project")}  ${s.project ?? "\u2014"}  (branch: ${s.gitBranch ?? "\u2014"})`,
+      `${import_picocolors8.default.bold("Turns")}    ${s.stats.turns}  \xB7  models: ${s.stats.models.join(", ") || "\u2014"}`,
+      `${import_picocolors8.default.bold("Tokens")}   ${s.stats.totalTokens.toLocaleString()}  (~${fmtCost(
         s.stats.estimatedCostUsd
       )})`,
-      `${import_picocolors7.default.bold("Skills")}   ${s.stats.skills.join(", ") || "\u2014"}`,
-      `${import_picocolors7.default.bold("Agents")}   ${s.stats.subagents.join(", ") || "\u2014"}`,
-      hitEntries.length ? import_picocolors7.default.yellow(
+      `${import_picocolors8.default.bold("Skills")}   ${s.stats.skills.join(", ") || "\u2014"}`,
+      `${import_picocolors8.default.bold("Agents")}   ${s.stats.subagents.join(", ") || "\u2014"}`,
+      hitEntries.length ? import_picocolors8.default.yellow(
         `Redacted secrets: ${hitEntries.map(([k2, v2]) => `${k2}\xD7${v2}`).join(", ")}`
-      ) : import_picocolors7.default.green("No secrets detected by the redactor.")
+      ) : import_picocolors8.default.green("No secrets detected by the redactor.")
     ].join("\n"),
     "Preview"
   );
@@ -1548,22 +1593,22 @@ async function runPublish() {
     if (!resp.ok) throw new Error(`server responded ${resp.status}: ${await resp.text()}`);
     const data = await resp.json();
     spin.stop("Uploaded.");
-    $e(import_picocolors7.default.green(`\u2714 Shared! ${SERVER.replace(/:\d+$/, ":5173")}/session/${data.id}`));
+    $e(import_picocolors8.default.green(`\u2714 Shared! ${SERVER.replace(/:\d+$/, ":5173")}/session/${data.id}`));
   } catch (err) {
     spin.stop("Upload failed.");
     ue(String(err));
     process.exit(1);
   }
 }
-var import_picocolors7, PROJECTS_DIR2, SERVER, TOKEN;
+var import_picocolors8, PROJECTS_DIR2, SERVER, TOKEN;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
     init_dist2();
-    import_picocolors7 = __toESM(require_picocolors(), 1);
+    import_picocolors8 = __toESM(require_picocolors(), 1);
     init_src();
     init_config();
-    PROJECTS_DIR2 = join4(homedir4(), ".claude", "projects");
+    PROJECTS_DIR2 = join5(homedir4(), ".claude", "projects");
     SERVER = process.env.CLAUDELENS_SERVER ?? "http://localhost:4000";
     TOKEN = process.env.CLAUDELENS_TOKEN ?? "";
   }
@@ -1641,6 +1686,7 @@ Usage: claudelens <command>
   setup       Configure your name, server URL and token
   projects    Choose which projects are tracked (interactive checklist)
   status      Show current config and tracked projects
+  update      Pull the latest code + rebuild \u2014 no plugin reinstall
   install     Add the 'claudelens' command to your PATH (~/.local/bin)
   publish     Manually pick and publish one past session
   sync        (internal) invoked by the Stop hook; reads a hook payload on stdin
@@ -1655,6 +1701,8 @@ async function main() {
       return (await Promise.resolve().then(() => (init_projects(), projects_exports))).runProjects();
     case "status":
       return (await Promise.resolve().then(() => (init_status(), status_exports))).runStatus();
+    case "update":
+      return (await Promise.resolve().then(() => (init_update(), update_exports))).runUpdate();
     case "install":
       return (await Promise.resolve().then(() => (init_install(), install_exports))).runInstall();
     case "publish":

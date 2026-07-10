@@ -12,6 +12,7 @@ Usage: claudelens <command>
   setup       Configure your name, server URL and token
   projects    Choose which projects are tracked (interactive checklist)
   status      Show current config and tracked projects
+  update      Pull the latest code + rebuild — no plugin reinstall
   install     Add the 'claudelens' command to your PATH (~/.local/bin)
   publish     Manually pick and publish one past session
   sync        (internal) invoked by the Stop hook; reads a hook payload on stdin
@@ -27,6 +28,8 @@ async function main() {
       return (await import('./projects.js')).runProjects();
     case 'status':
       return (await import('./status.js')).runStatus();
+    case 'update':
+      return (await import('./update.js')).runUpdate();
     case 'install':
       return (await import('./install.js')).runInstall();
     case 'publish':
