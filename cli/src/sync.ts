@@ -1,9 +1,8 @@
-#!/usr/bin/env -S npx tsx
-// ClaudeLens Stop-hook sync. Invoked by Claude Code after each assistant turn.
-// Reads the hook payload from stdin, and if the session's project is opted in,
-// pushes the current transcript to the server. The server upserts on
-// (session_id, contributor_id), so re-running every turn (and across resumes)
-// just refreshes one row. Best-effort: this NEVER blocks or fails the session.
+// ClaudeLens Stop-hook sync. Invoked by Claude Code after each assistant turn
+// (`claudelens sync`, fed the hook payload on stdin). If the session's project
+// is tracked, it pushes the current transcript to the server. The server
+// upserts on (session_id, author), so re-running every turn (and across
+// resumes) just refreshes one row. Best-effort: NEVER blocks or fails a session.
 import { readFile } from 'node:fs/promises';
 import { parseTranscript, redactDeep } from '@claudelens/shared';
 import type { IngestPayload, ParsedSession } from '@claudelens/shared';
@@ -43,9 +42,9 @@ async function readSettledSession(path: string): Promise<ParsedSession> {
   return session;
 }
 
-async function run() {
+export async function runSync(): Promise<void> {
   const cfg = await loadConfig();
-  if (!cfg) return; // not set up — run /claudelens:setup first
+  if (!cfg) return; // not set up — run `claudelens setup` first
 
   const raw = await readStdin();
   let hook: HookInput = {};
@@ -69,10 +68,7 @@ async function run() {
     }
   }
 
-  const payload: IngestPayload = {
-    session,
-    author: cfg.name,
-  };
+  const payload: IngestPayload = { session, author: cfg.name };
 
   await fetch(`${cfg.server}/api/sessions`, {
     method: 'POST',
@@ -83,8 +79,3 @@ async function run() {
     body: JSON.stringify(payload),
   });
 }
-
-// Swallow everything: a hook must not disrupt the session.
-run().catch((err) => {
-  if (process.env.CLAUDELENS_DEBUG) console.error('[claudelens sync]', err);
-});

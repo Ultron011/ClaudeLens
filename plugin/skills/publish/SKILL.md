@@ -1,14 +1,14 @@
 ---
-description: Manually publish a past Claude Code session to the ClaudeLens gallery, with a curation note and tags. Use for one-off sharing; day-to-day capture is automatic.
+description: Manually pick and publish one past Claude Code session to the gallery. Interactive — run in the user's own terminal. Day-to-day capture is automatic.
 ---
 
-Launch the ClaudeLens interactive publisher so the user can pick one of their
-past sessions, add a note and tags, and upload it:
+Manual publishing is interactive (pick a session, review, confirm), and
+interactive prompts do **not** work inside Claude Code. Tell the user to run
+this in their own terminal:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/dist/index.mjs"
+claudelens publish
 ```
 
-This is the manual path (choose a session, review, confirm). Automatic per-turn
-sync for opted-in projects happens on its own via the Stop hook and needs no
-command.
+Note that this is only for one-off sharing — sessions in tracked projects sync
+automatically after every turn via the Stop hook, with no command needed.

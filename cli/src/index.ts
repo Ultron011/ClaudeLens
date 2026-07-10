@@ -1,4 +1,3 @@
-#!/usr/bin/env -S npx tsx
 // ClaudeLens publisher — opt-in sharing of a local Claude Code session.
 // Nothing is uploaded until the developer picks a session, reviews the
 // redaction report, and confirms.
@@ -59,7 +58,7 @@ function fmtCost(n: number) {
   return n >= 0.01 ? `$${n.toFixed(2)}` : `$${n.toFixed(4)}`;
 }
 
-async function main() {
+export async function runPublish() {
   console.clear();
   p.intro(pc.bgCyan(pc.black(' ClaudeLens ')) + pc.dim(' share a session so your team can learn'));
 
@@ -173,8 +172,3 @@ async function main() {
     process.exit(1);
   }
 }
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});

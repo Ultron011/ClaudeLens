@@ -1,5 +1,4 @@
-#!/usr/bin/env -S npx tsx
-// `/claudelens:projects` — pick which projects ClaudeLens tracks.
+// `claudelens projects` — pick which projects ClaudeLens tracks.
 // Discovers the projects you've used Claude Code in, shows a checklist
 // (ticked = tracked), and writes the excluded ones to your config. No marker
 // files or JSON editing required.
@@ -12,7 +11,7 @@ import { loadConfig, saveConfig } from './config.js';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
-interface Discovered {
+export interface Discovered {
   cwd: string;
   label: string;
   sessions: number;
@@ -36,7 +35,7 @@ async function cwdOf(dir: string, files: string[]): Promise<string | undefined> 
   return undefined;
 }
 
-async function discover(): Promise<Discovered[]> {
+export async function discover(): Promise<Discovered[]> {
   let dirs: string[];
   try {
     dirs = await readdir(PROJECTS_DIR);
@@ -62,7 +61,7 @@ async function discover(): Promise<Discovered[]> {
   return [...byCwd.values()].sort((a, b) => b.sessions - a.sessions);
 }
 
-function isExcluded(cwd: string, optOut: string[]): boolean {
+export function isExcluded(cwd: string, optOut: string[]): boolean {
   const d = resolve(cwd);
   return optOut.some((root) => {
     const r = resolve(root);
@@ -70,7 +69,7 @@ function isExcluded(cwd: string, optOut: string[]): boolean {
   });
 }
 
-async function main() {
+export async function runProjects() {
   p.intro(pc.bgCyan(pc.black(' ClaudeLens · projects ')));
 
   const cfg = await loadConfig();
@@ -111,8 +110,3 @@ async function main() {
   );
   p.outro(pc.dim('Excluded projects stop syncing immediately; tracked ones resume on the next turn.'));
 }
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});

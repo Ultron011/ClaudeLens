@@ -1,13 +1,12 @@
-#!/usr/bin/env -S npx tsx
-// `/claudelens:setup` — identity + server config (name, server URL, token).
+// `claudelens setup` — identity + server config (name, server URL, token).
 // Tracking is ON by default for every project; choose which projects to track
-// or exclude with `/claudelens:projects`.
+// or exclude with `claudelens projects`.
 import { userInfo } from 'node:os';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
 import { loadConfig, saveConfig, newConfig, CONFIG_PATH, type ClaudeLensConfig } from './config.js';
 
-async function main() {
+export async function runSetup() {
   p.intro(pc.bgCyan(pc.black(' ClaudeLens setup ')));
 
   const existing = await loadConfig();
@@ -57,11 +56,6 @@ async function main() {
     pc.green('Setup complete — your sessions sync automatically.') +
       '\n' +
       pc.dim('Choose which projects to track/exclude:  ') +
-      pc.cyan('/claudelens:projects'),
+      pc.cyan('claudelens projects'),
   );
 }
-
-main().catch((err) => {
-  console.error(err);
-  process.exit(1);
-});

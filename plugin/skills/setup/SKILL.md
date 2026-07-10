@@ -1,17 +1,20 @@
 ---
-description: Configure ClaudeLens — set your contributor name and opt the current project in to automatic session sync. Run once per machine, and again in each project you want tracked.
+description: Configure ClaudeLens (your name, server URL, ingest token). Interactive — must be run in the user's own terminal, not inside Claude Code.
 ---
 
-Run the ClaudeLens setup wizard so this developer's sessions sync to the team gallery.
-
-Execute the bundled setup script and let the user answer its interactive prompts:
+ClaudeLens setup is interactive, and interactive prompts do **not** work inside
+Claude Code (no TTY). Do not try to run it yourself. Instead, tell the user to
+run this in their own terminal:
 
 ```
-node "${CLAUDE_PLUGIN_ROOT}/dist/setup.mjs"
+claudelens setup
 ```
 
-The wizard asks for a display name, the server URL, and whether to track the
-current project. It writes `~/.claude/claudelens.json` and, if the project is
-opted in, a committed `.claudelens.json` marker in the project root. After it
-finishes, remind the user that sessions in tracked projects now sync
-automatically after every turn — no further action needed.
+If the `claudelens` command isn't found, tell them to install it once (from the
+cloned repo):
+
+```
+node plugin/dist/claudelens.mjs install
+```
+
+and add `~/.local/bin` to their PATH if prompted. Then `claudelens setup`.
