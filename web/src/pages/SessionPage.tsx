@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import { useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { Turn } from '@claudelens/shared';
-import { getSession, patchSession, type SessionDetail } from '../api.js';
+import { getSession, patchSession, deleteSession, type SessionDetail } from '../api.js';
 import { fmtDuration, fmtTokens } from '../format.js';
 import { Shell, type Crumb } from '../components/Shell.js';
 
@@ -9,6 +9,7 @@ export function SessionPage() {
   const { id } = useParams<{ id: string }>();
   const [s, setS] = useState<SessionDetail | null>(null);
   const [err, setErr] = useState('');
+  const nav = useNavigate();
 
   useEffect(() => {
     if (!id) return;
@@ -20,10 +21,16 @@ export function SessionPage() {
     const u = await patchSession(s.id, { featured: !s.featured });
     setS({ ...s, featured: u.featured });
   }
-  async function toggleHidden() {
+  async function remove() {
     if (!s) return;
-    const u = await patchSession(s.id, { hidden: !s.hidden });
-    setS({ ...s, hidden: u.hidden });
+    if (!window.confirm(`Delete this session permanently?\n\n“${s.title}”`)) return;
+    await deleteSession(s.id);
+    // back to the project (or the author) it belonged to
+    nav(
+      s.project
+        ? `/u/${encodeURIComponent(s.author)}/${encodeURIComponent(s.project)}`
+        : `/u/${encodeURIComponent(s.author)}`,
+    );
   }
 
   if (err)
@@ -61,8 +68,8 @@ export function SessionPage() {
           <button className={s.featured ? 'chip on' : 'chip'} onClick={toggleFeatured}>
             ★ {s.featured ? 'Featured' : 'Feature'}
           </button>
-          <button className={s.hidden ? 'chip danger on' : 'chip danger'} onClick={toggleHidden}>
-            {s.hidden ? 'Hidden — restore' : 'Hide'}
+          <button className="chip danger" onClick={remove}>
+            Delete
           </button>
         </>
       }

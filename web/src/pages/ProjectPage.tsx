@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
-import { listSessions } from '../api.js';
+import { listSessions, deleteProject } from '../api.js';
 import { fmtDate, fmtTokens } from '../format.js';
 import { Shell } from '../components/Shell.js';
 
 export function ProjectPage() {
   const { author = '', project = '' } = useParams<{ author: string; project: string }>();
   const [rows, setRows] = useState<SessionSummary[] | null>(null);
+  const nav = useNavigate();
 
   useEffect(() => {
     setRows(null);
@@ -29,8 +30,28 @@ export function ProjectPage() {
     return { turns, tokens, count: sessions.length };
   }, [sessions]);
 
+  async function removeProject() {
+    if (
+      !window.confirm(
+        `Delete ALL ${sessions.length} session(s) in “${project}” by ${author}?\n\nThis cannot be undone.`,
+      )
+    )
+      return;
+    await deleteProject(author, project);
+    nav(`/u/${encodeURIComponent(author)}`);
+  }
+
   return (
-    <Shell crumbs={[{ label: author, to: `/u/${encodeURIComponent(author)}` }, { label: project }]}>
+    <Shell
+      crumbs={[{ label: author, to: `/u/${encodeURIComponent(author)}` }, { label: project }]}
+      actions={
+        sessions.length > 0 ? (
+          <button className="chip danger" onClick={removeProject}>
+            Delete project
+          </button>
+        ) : undefined
+      }
+    >
       <div className="layout">
         <aside className="sidebar">
           <div className="panel">

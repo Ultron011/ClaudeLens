@@ -42,20 +42,15 @@ export async function runSetup() {
       `${pc.bold('Name')}     ${cfg.name}`,
       `${pc.bold('Server')}   ${cfg.server}`,
       `${pc.bold('Token')}    ${cfg.token ? pc.green('set') : pc.dim('(none)')}`,
-      `${pc.bold('Tracking')} ${pc.green('ON')} for all projects`,
-      cfg.optOutProjects.length
-        ? `${pc.bold('Excluded')} ${cfg.optOutProjects.length} project(s)`
-        : '',
+      `${pc.bold('Tracking')} ${cfg.trackProjects.length} project(s) opted in`,
       `${pc.bold('Config')}   ${CONFIG_PATH}`,
-    ]
-      .filter(Boolean)
-      .join('\n'),
+    ].join('\n'),
     'Saved',
   );
   p.outro(
-    pc.green('Setup complete — your sessions sync automatically.') +
+    pc.green('Setup complete.') +
       '\n' +
-      pc.dim('Choose which projects to track/exclude:  ') +
-      pc.cyan('claudelens projects'),
+      pc.dim('Nothing syncs until you opt a project in. Inside a project, run:  ') +
+      pc.cyan('claudelens track'),
   );
 }

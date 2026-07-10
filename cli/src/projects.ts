@@ -1,13 +1,13 @@
-// `claudelens projects` — pick which projects ClaudeLens tracks.
-// Discovers the projects you've used Claude Code in, shows a checklist
-// (ticked = tracked), and writes the excluded ones to your config. No marker
-// files or JSON editing required.
+// `claudelens projects` — pick which projects ClaudeLens tracks (opt-in).
+// Discovers the projects you've used Claude Code in and shows a checklist;
+// ticked = tracked. Nothing syncs unless it's ticked. Writes your config —
+// no marker files or JSON editing.
 import { readdir, readFile } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, sep, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import * as p from '@clack/prompts';
 import pc from 'picocolors';
-import { loadConfig, saveConfig } from './config.js';
+import { loadConfig, saveConfig, isUnderAny } from './config.js';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
@@ -70,12 +70,9 @@ export async function discover(): Promise<Discovered[]> {
   return [...byCwd.values()].sort((a, b) => b.sessions - a.sessions);
 }
 
-export function isExcluded(cwd: string, optOut: string[]): boolean {
-  const d = resolve(cwd);
-  return optOut.some((root) => {
-    const r = resolve(root);
-    return d === r || d.startsWith(r + sep);
-  });
+/** Whether a project is currently tracked (opt-in list). */
+export function isTracked(cwd: string, trackProjects: string[]): boolean {
+  return isUnderAny(cwd, trackProjects);
 }
 
 export async function runProjects() {
@@ -83,7 +80,7 @@ export async function runProjects() {
 
   const cfg = await loadConfig();
   if (!cfg) {
-    p.cancel('Not set up yet — run /claudelens:setup first.');
+    p.cancel('Not set up yet — run `claudelens setup` first.');
     return;
   }
 
@@ -94,28 +91,25 @@ export async function runProjects() {
   }
 
   const tracked = await p.multiselect({
-    message: 'Which projects should ClaudeLens track?',
+    message: 'Which projects should ClaudeLens track?  (nothing is tracked by default)',
     options: projects.map((pr) => ({
       value: pr.cwd,
       label: pr.label,
       hint: `${pr.sessions} session${pr.sessions === 1 ? '' : 's'}`,
     })),
-    initialValues: projects.filter((pr) => !isExcluded(pr.cwd, cfg.optOutProjects)).map((pr) => pr.cwd),
+    initialValues: projects.filter((pr) => isTracked(pr.cwd, cfg.trackProjects)).map((pr) => pr.cwd),
     required: false,
   });
   if (p.isCancel(tracked)) return p.cancel('Cancelled — nothing changed.');
 
-  const keep = new Set(tracked as string[]);
-  cfg.optOutProjects = projects.filter((pr) => !keep.has(pr.cwd)).map((pr) => pr.cwd);
+  const picked = tracked as string[];
+  // Keep any tracked projects that weren't in the discovered list (e.g. a fresh
+  // project added via `claudelens track` before it has sessions).
+  const discoveredCwds = new Set(projects.map((pr) => resolve(pr.cwd)));
+  const keptUndiscovered = cfg.trackProjects.filter((d) => !discoveredCwds.has(resolve(d)));
+  cfg.trackProjects = [...picked, ...keptUndiscovered];
   await saveConfig(cfg);
 
-  const excluded = projects.length - keep.size;
-  p.note(
-    [
-      `${pc.green('Tracking')}  ${keep.size} project(s)`,
-      `${pc.yellow('Excluded')}  ${excluded} project(s)`,
-    ].join('\n'),
-    'Saved',
-  );
-  p.outro(pc.dim('Excluded projects stop syncing immediately; tracked ones resume on the next turn.'));
+  p.note(`${pc.green('Tracking')}  ${cfg.trackProjects.length} project(s)`, 'Saved');
+  p.outro(pc.dim('Newly tracked projects sync on their next turn; untracked ones stop immediately.'));
 }

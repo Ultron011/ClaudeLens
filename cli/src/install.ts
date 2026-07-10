@@ -27,5 +27,7 @@ export async function runInstall() {
     console.log(pc.yellow(`  ⚠  ${binDir} is not on your PATH. Add it:`));
     console.log(`     ${pc.cyan(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)}\n`);
   }
-  console.log(pc.dim(`  To update later: 'git pull' in the ClaudeLens repo — the command tracks this bundle.\n`));
+  console.log(
+    `  ${pc.dim('To update later:')} ${pc.cyan('claudelens update')} ${pc.dim('(pulls + rebuilds — no reinstall)')}\n`,
+  );
 }

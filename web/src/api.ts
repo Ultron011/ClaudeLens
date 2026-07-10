@@ -47,3 +47,16 @@ export async function patchSession(
   if (!r.ok) throw new Error(await r.text());
   return r.json();
 }
+
+export async function deleteSession(id: string): Promise<void> {
+  const r = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+}
+
+export async function deleteProject(author: string, project: string): Promise<number> {
+  const q = new URLSearchParams({ author, project });
+  const r = await fetch(`/api/projects?${q}`, { method: 'DELETE' });
+  if (!r.ok) throw new Error(await r.text());
+  const { deleted } = (await r.json()) as { deleted: number };
+  return deleted;
+}

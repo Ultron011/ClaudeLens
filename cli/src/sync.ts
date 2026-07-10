@@ -53,10 +53,10 @@ export async function runSync(): Promise<void> {
   } catch {
     return;
   }
-  const { transcript_path, cwd, session_id } = hook;
+  const { transcript_path, cwd } = hook;
   if (!transcript_path || !cwd) return;
 
-  if (!(await shouldTrack(cwd, session_id ?? '', cfg))) return; // explicitly opted out
+  if (!shouldTrack(cwd, cfg)) return; // project not opted in — nothing to sync
 
   const session = await readSettledSession(transcript_path);
   if (!session.sessionId || session.stats.turns < 1) return;

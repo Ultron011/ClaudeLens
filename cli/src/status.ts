@@ -3,7 +3,7 @@
 // Claude Code skill).
 import pc from 'picocolors';
 import { loadConfig, CONFIG_PATH } from './config.js';
-import { discover, isExcluded } from './projects.js';
+import { discover, isTracked } from './projects.js';
 
 export async function runStatus() {
   const cfg = await loadConfig();
@@ -29,15 +29,20 @@ export async function runStatus() {
   }
 
   const projects = await discover();
-  const tracked = projects.filter((p) => !isExcluded(p.cwd, cfg.optOutProjects));
-  const excluded = projects.filter((p) => isExcluded(p.cwd, cfg.optOutProjects));
+  const tracked = projects.filter((p) => isTracked(p.cwd, cfg.trackProjects));
 
-  console.log(pc.bold(`\n  Projects  ${pc.green(`${tracked.length} tracked`)} · ${pc.yellow(`${excluded.length} excluded`)}\n`));
+  console.log(
+    pc.bold(
+      `\n  Projects  ${pc.green(`${tracked.length} tracked`)} · ${pc.dim(`${projects.length - tracked.length} not tracked`)}\n`,
+    ),
+  );
   for (const p of projects) {
-    const off = isExcluded(p.cwd, cfg.optOutProjects);
-    const mark = off ? pc.yellow('✗') : pc.green('✓');
-    const label = off ? pc.dim(p.label) : p.label;
+    const on = isTracked(p.cwd, cfg.trackProjects);
+    const mark = on ? pc.green('✓') : pc.dim('·');
+    const label = on ? p.label : pc.dim(p.label);
     console.log(`  ${mark} ${label} ${pc.dim(`(${p.sessions})`)}`);
   }
-  console.log(`\n  Change with ${pc.cyan('claudelens projects')}\n`);
+  console.log(
+    `\n  Track the current project with ${pc.cyan('claudelens track')}, or edit with ${pc.cyan('claudelens projects')}\n`,
+  );
 }

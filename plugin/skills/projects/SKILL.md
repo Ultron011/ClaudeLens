@@ -1,8 +1,8 @@
 ---
-description: Choose which projects ClaudeLens tracks (opt in/out). Interactive checklist — must be run in the user's own terminal, not inside Claude Code.
+description: Edit which projects ClaudeLens tracks — an interactive checklist (tick = track). Must be run in the user's own terminal, not inside Claude Code.
 ---
 
-The project picker is interactive, and interactive prompts do **not** work
+The project checklist is interactive, and interactive prompts do **not** work
 inside Claude Code (no TTY). Do not try to run it yourself. Tell the user to run
 this in their own terminal:
 
@@ -10,9 +10,7 @@ this in their own terminal:
 claudelens projects
 ```
 
-It lists every project they've used Claude Code in (ticked = tracked); they
-untick to exclude and it saves the choice — no files or JSON to edit. Excluded
-projects stop syncing immediately.
-
-Also mention: a whole repo can be excluded team-wide by committing a
-`.claudelens-ignore` file at its root.
+Tracking is **opt-in**: nothing syncs unless ticked. Ticking a project starts
+syncing its sessions; unticking stops it. For the common case of "track the
+project I'm in", they can instead just run `claudelens track` inside it (or the
+`/claudelens:track` skill).

@@ -96,9 +96,10 @@ Push it to GitHub, then each teammate runs, inside Claude Code:
 /claudelens:setup          # enter your name + the server URL + token
 ```
 
-From then on every session syncs automatically after each turn. Tracking is
-**on by default**; opt a project out with a committed `.claudelens-ignore` file,
-or hide a single session from the dashboard.
+Tracking is **opt-in**: nothing syncs until you turn it on for a project. Inside
+a project you want captured, run `claudelens track` (or the `/claudelens:track`
+skill) once — from then on its sessions sync automatically after each turn.
+Manage the list with `claudelens projects`, or stop one with `claudelens untrack`.
 
 > After changing `cli/` or `shared/`, run `pnpm plugin:build` and commit the
 > updated `plugin/dist/*.mjs` — that bundle is what the installed plugin runs.

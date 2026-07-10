@@ -214,6 +214,40 @@ app.patch('/api/sessions/:id', async (req, res) => {
   }
 });
 
+// Delete a single session.
+app.delete('/api/sessions/:id', async (req, res) => {
+  try {
+    const { rowCount } = await pool.query('DELETE FROM sessions WHERE id = $1', [req.params.id]);
+    if (!rowCount) return res.status(404).json({ error: 'not found' });
+    res.json({ deleted: rowCount });
+  } catch (err) {
+    console.error('delete error:', err);
+    res.status(500).json({ error: 'delete failed' });
+  }
+});
+
+// Delete every session for one author+project (a "project" on the dashboard).
+app.delete('/api/projects', async (req, res) => {
+  const { author, project } = req.query as Record<string, string>;
+  if (!author || !project) {
+    return res.status(400).json({ error: 'author and project are required' });
+  }
+  // The dashboard groups project-less sessions under "(no project)".
+  const noProject = project === '(no project)';
+  try {
+    const { rowCount } = await pool.query(
+      noProject
+        ? 'DELETE FROM sessions WHERE author = $1 AND project IS NULL'
+        : 'DELETE FROM sessions WHERE author = $1 AND project = $2',
+      noProject ? [author] : [author, project],
+    );
+    res.json({ deleted: rowCount ?? 0 });
+  } catch (err) {
+    console.error('delete project error:', err);
+    res.status(500).json({ error: 'delete failed' });
+  }
+});
+
 // Serve the built dashboard from the same origin as the API (production).
 // The web app calls relative /api/* paths, so co-hosting means zero CORS/URL
 // config for viewers. Falls back to index.html for client-side routing.

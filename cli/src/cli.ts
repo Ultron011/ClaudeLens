@@ -9,13 +9,15 @@ function printHelp() {
 
 Usage: claudelens <command>
 
-  setup       Configure your name, server URL and token
-  projects    Choose which projects are tracked (interactive checklist)
-  status      Show current config and tracked projects
-  update      Pull the latest code + rebuild — no plugin reinstall
-  install     Add the 'claudelens' command to your PATH (~/.local/bin)
-  publish     Manually pick and publish one past session
-  sync        (internal) invoked by the Stop hook; reads a hook payload on stdin
+  track [dir]    Start tracking a project (defaults to the current directory)
+  untrack [dir]  Stop tracking a project
+  projects       Edit tracked projects (interactive checklist)
+  status         Show current config and tracked projects
+  setup          Configure your name, server URL and token
+  update         Pull the latest code + rebuild — no plugin reinstall
+  install        Add the 'claudelens' command to your PATH (~/.local/bin)
+  publish        Manually pick and publish one past session
+  sync           (internal) invoked by the Stop hook; reads a hook payload on stdin
 
 Run these in your own terminal — interactive prompts don't work inside Claude Code.`);
 }
@@ -24,6 +26,10 @@ async function main() {
   switch (cmd) {
     case 'setup':
       return (await import('./setup.js')).runSetup();
+    case 'track':
+      return (await import('./track.js')).runTrack();
+    case 'untrack':
+      return (await import('./track.js')).runUntrack();
     case 'projects':
       return (await import('./projects.js')).runProjects();
     case 'status':
