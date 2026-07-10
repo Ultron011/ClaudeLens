@@ -1,0 +1,37 @@
+# Production deploy: Postgres + the ClaudeLens app (API + dashboard on one port).
+#   1. cp .env.example .env  and set CLAUDELENS_TOKEN (+ a real POSTGRES_PASSWORD)
+#   2. docker compose -f docker-compose.prod.yml up -d --build
+#   3. point teammates' `/claudelens:setup` at http://<this-host>:<CLAUDELENS_PORT>
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: claudelens
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claudelens}
+      POSTGRES_DB: claudelens
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claudelens"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  app:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PORT: 4000
+      DATABASE_URL: postgres://claudelens:${POSTGRES_PASSWORD:-claudelens}@db:5432/claudelens
+      # Required in production: gates ingest so only teammates with the token
+      # can publish. Teammates put the same value in ~/.claude/claudelens.json.
+      CLAUDELENS_TOKEN: ${CLAUDELENS_TOKEN:?set CLAUDELENS_TOKEN in .env before deploying}
+    ports:
+      - "${CLAUDELENS_PORT:-4000}:4000"
+    restart: unless-stopped
+
+volumes:
+  pgdata:

@@ -1,6 +1,9 @@
 import express from 'express';
 import cors from 'cors';
 import 'dotenv/config';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { pool, SCHEMA } from './db.js';
 import type { IngestPayload } from '@claudelens/shared';
 
@@ -210,6 +213,19 @@ app.patch('/api/sessions/:id', async (req, res) => {
     res.status(500).json({ error: 'update failed' });
   }
 });
+
+// Serve the built dashboard from the same origin as the API (production).
+// The web app calls relative /api/* paths, so co-hosting means zero CORS/URL
+// config for viewers. Falls back to index.html for client-side routing.
+const WEB_DIST = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+if (existsSync(WEB_DIST)) {
+  app.use(express.static(WEB_DIST));
+  app.use((req, res, next) => {
+    if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+    res.sendFile(join(WEB_DIST, 'index.html'));
+  });
+  console.log(`serving dashboard from ${WEB_DIST}`);
+}
 
 const PORT = Number(process.env.PORT ?? 4000);
 

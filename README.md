@@ -63,6 +63,46 @@ pnpm cli
 
 Open http://localhost:5173.
 
+## Deploying for your team
+
+ClaudeLens is two halves: a **plugin** each engineer installs, and **one server**
+everyone's plugin reports to.
+
+### 1. Host the server (one command)
+
+On any host your team can reach (a VPS with HTTPS, or an internal/VPN box):
+
+```bash
+cp .env.example .env
+# set CLAUDELENS_TOKEN (openssl rand -hex 24) and a real POSTGRES_PASSWORD
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+This builds one image that serves the **dashboard and the API on the same port**
+(`CLAUDELENS_PORT`, default 4000) and brings up Postgres. The schema is created
+automatically on boot. Visit `http://<host>:<port>` for the gallery.
+
+`CLAUDELENS_TOKEN` is **required** in this compose file — only clients sending it
+may publish, so an exposed server can't be spammed.
+
+### 2. Publish the plugin
+
+The repo *is* the plugin marketplace (`.claude-plugin/marketplace.json` → `./plugin`).
+Push it to GitHub, then each teammate runs, inside Claude Code:
+
+```
+/plugin marketplace add <owner>/<repo>
+/plugin install claudelens@claudelens
+/claudelens:setup          # enter your name + the server URL + token
+```
+
+From then on every session syncs automatically after each turn. Tracking is
+**on by default**; opt a project out with a committed `.claudelens-ignore` file,
+or hide a single session from the dashboard.
+
+> After changing `cli/` or `shared/`, run `pnpm plugin:build` and commit the
+> updated `plugin/dist/*.mjs` — that bundle is what the installed plugin runs.
+
 ## Configuration
 
 | Var                 | Where   | Purpose                                            |
@@ -70,7 +110,9 @@ Open http://localhost:5173.
 | `DATABASE_URL`      | server  | Postgres connection string                         |
 | `PORT`              | server  | API port (default 4000)                            |
 | `CLAUDELENS_SERVER` | cli     | Ingest target (default `http://localhost:4000`)    |
-| `CLAUDELENS_TOKEN`  | both    | Optional shared bearer token to gate ingest        |
+| `CLAUDELENS_TOKEN`  | both    | Shared bearer token to gate ingest (required in prod compose) |
+| `CLAUDELENS_PORT`   | deploy  | Host port the prod container exposes (default 4000) |
+| `POSTGRES_PASSWORD` | deploy  | Password for the bundled Postgres in prod compose  |
 
 ## Reused ideas / prior art
 
