@@ -1,0 +1,14 @@
+node_modules/
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+web/dist/
+pgdata/
+
+# Imported dev-time design tool (third-party); not part of the product.
+.claude/
+
+# NOTE: the blanket "dist/" rule is intentionally omitted — plugin/dist/*.mjs
+# is committed because the installed Claude Code plugin runs those bundles.

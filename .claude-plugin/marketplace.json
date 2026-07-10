@@ -1,0 +1,13 @@
+{
+  "name": "claudelens",
+  "owner": {
+    "name": "BeyondChats"
+  },
+  "plugins": [
+    {
+      "name": "claudelens",
+      "source": "./plugin",
+      "description": "Automatic Claude Code session sync to the team ClaudeLens gallery."
+    }
+  ]
+}

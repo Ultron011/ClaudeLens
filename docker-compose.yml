@@ -1,0 +1,17 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: claudelens-pg
+    environment:
+      POSTGRES_USER: claudelens
+      POSTGRES_PASSWORD: claudelens
+      POSTGRES_DB: claudelens
+    ports:
+      - "5544:5432"
+    volumes:
+      - ./pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U claudelens"]
+      interval: 5s
+      timeout: 3s
+      retries: 10

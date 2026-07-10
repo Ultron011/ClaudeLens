@@ -1,0 +1,9 @@
+{
+  "name": "claudelens",
+  "displayName": "ClaudeLens",
+  "description": "Automatically syncs your Claude Code sessions in opted-in projects to your team's ClaudeLens gallery, so everyone can learn how the team works with Claude.",
+  "version": "0.1.0",
+  "author": {
+    "name": "BeyondChats"
+  }
+}

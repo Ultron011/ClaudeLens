@@ -1,0 +1,29 @@
+{
+  "name": "@claudelens/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "claudelens": "src/index.ts",
+    "claudelens-setup": "src/setup.ts",
+    "claudelens-sync": "src/sync.ts"
+  },
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "setup": "tsx src/setup.ts",
+    "sync": "tsx src/sync.ts",
+    "build:plugin": "esbuild src/sync.ts src/setup.ts src/index.ts --bundle --platform=node --format=esm --target=node20 --outdir=../plugin/dist --out-extension:.js=.mjs",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@claudelens/shared": "workspace:*",
+    "@clack/prompts": "^0.7.0",
+    "picocolors": "^1.1.1"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "esbuild": "^0.24.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3"
+  }
+}

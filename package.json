@@ -1,0 +1,25 @@
+{
+  "name": "claudelens",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A lens into how your team works with Claude Code — an opt-in, self-hosted gallery of shared sessions for learning.",
+  "packageManager": "pnpm@10.26.2",
+  "scripts": {
+    "dev": "pnpm --parallel --filter server --filter web dev",
+    "dev:server": "pnpm --filter server dev",
+    "dev:web": "pnpm --filter web dev",
+    "db:up": "docker compose up -d",
+    "db:down": "docker compose down",
+    "db:reset": "docker compose down -v",
+    "db:migrate": "pnpm --filter server migrate",
+    "cli": "pnpm --filter @claudelens/cli start",
+    "plugin:build": "pnpm --filter @claudelens/cli build:plugin",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}
