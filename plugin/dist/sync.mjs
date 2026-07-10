@@ -289,6 +289,17 @@ async function readStdin() {
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
 }
+var sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+async function readSettledSession(path) {
+  let session = parseTranscript(await readFile2(path, "utf8"));
+  for (let i = 0; i < 10; i++) {
+    const last = session.turns[session.turns.length - 1];
+    if (last && last.role === "assistant") break;
+    await sleep(250);
+    session = parseTranscript(await readFile2(path, "utf8"));
+  }
+  return session;
+}
 async function run() {
   const cfg = await loadConfig();
   if (!cfg) return;
@@ -302,8 +313,7 @@ async function run() {
   const { transcript_path, cwd, session_id } = hook;
   if (!transcript_path || !cwd) return;
   if (!await shouldTrack(cwd, session_id ?? "", cfg)) return;
-  const jsonl = await readFile2(transcript_path, "utf8");
-  const session = parseTranscript(jsonl);
+  const session = await readSettledSession(transcript_path);
   if (!session.sessionId || session.stats.turns < 1) return;
   if (cfg.redact) {
     session.turns = redactDeep(session.turns).value;
