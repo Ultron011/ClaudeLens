@@ -980,11 +980,15 @@ async function cwdOf(dir, files) {
   for (const f2 of files) {
     try {
       const raw = await readFile2(join2(dir, f2), "utf8");
+      let scanned = 0;
       for (const line of raw.split("\n")) {
         if (!line.trim()) continue;
-        const e2 = JSON.parse(line);
-        if (e2.cwd) return e2.cwd;
-        break;
+        if (++scanned > 80) break;
+        try {
+          const e2 = JSON.parse(line);
+          if (e2.cwd) return e2.cwd;
+        } catch {
+        }
       }
     } catch {
     }

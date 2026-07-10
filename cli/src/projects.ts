@@ -17,16 +17,25 @@ export interface Discovered {
   sessions: number;
 }
 
-/** Read the real cwd from the first parseable line of a session file. */
+/**
+ * Read the real cwd from a session file. The first line is often a `mode` /
+ * summary entry with no cwd, so scan the first several entries (not just line
+ * one) until one carries a cwd.
+ */
 async function cwdOf(dir: string, files: string[]): Promise<string | undefined> {
   for (const f of files) {
     try {
       const raw = await readFile(join(dir, f), 'utf8');
+      let scanned = 0;
       for (const line of raw.split('\n')) {
         if (!line.trim()) continue;
-        const e = JSON.parse(line) as { cwd?: string };
-        if (e.cwd) return e.cwd;
-        break; // only need the first entry
+        if (++scanned > 80) break; // cap per file; cwd shows up well within this
+        try {
+          const e = JSON.parse(line) as { cwd?: string };
+          if (e.cwd) return e.cwd;
+        } catch {
+          /* skip malformed line */
+        }
       }
     } catch {
       /* try next file */
