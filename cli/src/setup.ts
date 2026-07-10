@@ -36,9 +36,24 @@ async function main() {
   });
   if (p.isCancel(server)) return p.cancel('Cancelled.');
 
+  const token = await p.password({
+    message: 'Ingest token (leave blank if the server is open)',
+  });
+  if (p.isCancel(token)) return p.cancel('Cancelled.');
+  // Blank keeps any existing token; type a value to set/replace it.
+  const tokenValue = (token as string).trim() || existing?.token || undefined;
+
   const cfg: ClaudeLensConfig = existing
-    ? { ...existing, name: (name as string).trim(), server: (server as string).trim() }
-    : newConfig((name as string).trim(), { server: (server as string).trim() });
+    ? {
+        ...existing,
+        name: (name as string).trim(),
+        server: (server as string).trim(),
+        token: tokenValue,
+      }
+    : newConfig((name as string).trim(), {
+        server: (server as string).trim(),
+        token: tokenValue,
+      });
 
   const cwd = resolve(process.cwd());
   const optOut = await p.confirm({
@@ -70,6 +85,7 @@ async function main() {
     [
       `${pc.bold('Name')}       ${cfg.name}`,
       `${pc.bold('Server')}     ${cfg.server}`,
+      `${pc.bold('Token')}      ${cfg.token ? pc.green('set') : pc.dim('(none)')}`,
       `${pc.bold('Tracking')}   ${pc.green('ON by default')} for all projects`,
       `${pc.bold('Opted out')}  ${cfg.optOutProjects.length ? cfg.optOutProjects.join('\n             ') : '(none)'}`,
       `${pc.bold('Config')}     ${CONFIG_PATH}`,

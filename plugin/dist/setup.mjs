@@ -465,6 +465,28 @@ var BD = class extends x {
     });
   }
 };
+var mD = Object.defineProperty;
+var dD = (e2, u, F) => u in e2 ? mD(e2, u, { enumerable: true, configurable: true, writable: true, value: F }) : e2[u] = F;
+var Y = (e2, u, F) => (dD(e2, typeof u != "symbol" ? u + "" : u, F), F);
+var bD = class extends x {
+  constructor({ mask: u, ...F }) {
+    super(F), Y(this, "valueWithCursor", ""), Y(this, "_mask", "\u2022"), this._mask = u ?? "\u2022", this.on("finalize", () => {
+      this.valueWithCursor = this.masked;
+    }), this.on("value", () => {
+      if (this.cursor >= this.value.length) this.valueWithCursor = `${this.masked}${import_picocolors.default.inverse(import_picocolors.default.hidden("_"))}`;
+      else {
+        const t = this.masked.slice(0, this.cursor), s = this.masked.slice(this.cursor);
+        this.valueWithCursor = `${t}${import_picocolors.default.inverse(s[0])}${s.slice(1)}`;
+      }
+    });
+  }
+  get cursor() {
+    return this._cursor;
+  }
+  get masked() {
+    return this.value.replaceAll(/./g, this._mask);
+  }
+};
 var TD = Object.defineProperty;
 var jD = (e2, u, F) => u in e2 ? TD(e2, u, { enumerable: true, configurable: true, writable: true, value: F }) : e2[u] = F;
 var MD = (e2, u, F) => (jD(e2, typeof u != "symbol" ? u + "" : u, F), F);
@@ -513,7 +535,7 @@ var Z = o("\u256E", "+");
 var z2 = o("\u251C", "+");
 var X2 = o("\u256F", "+");
 var J2 = o("\u25CF", "\u2022");
-var Y = o("\u25C6", "*");
+var Y2 = o("\u25C6", "*");
 var Q2 = o("\u25B2", "!");
 var ee = o("\u25A0", "x");
 var y2 = (r2) => {
@@ -546,6 +568,27 @@ ${import_picocolors2.default.yellow(d2)}  ${import_picocolors2.default.yellow(th
 ` + import_picocolors2.default.gray(a2) : ""}`;
     default:
       return `${n}${import_picocolors2.default.cyan(a2)}  ${t}
+${import_picocolors2.default.cyan(d2)}
+`;
+  }
+} }).prompt();
+var re = (r2) => new bD({ validate: r2.validate, mask: r2.mask ?? U2, render() {
+  const n = `${import_picocolors2.default.gray(a2)}
+${y2(this.state)}  ${r2.message}
+`, i = this.valueWithCursor, t = this.masked;
+  switch (this.state) {
+    case "error":
+      return `${n.trim()}
+${import_picocolors2.default.yellow(a2)}  ${t}
+${import_picocolors2.default.yellow(d2)}  ${import_picocolors2.default.yellow(this.error)}
+`;
+    case "submit":
+      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.dim(t)}`;
+    case "cancel":
+      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.strikethrough(import_picocolors2.default.dim(t ?? ""))}${t ? `
+` + import_picocolors2.default.gray(a2) : ""}`;
+    default:
+      return `${n}${import_picocolors2.default.cyan(a2)}  ${i}
 ${import_picocolors2.default.cyan(d2)}
 `;
   }
@@ -662,7 +705,20 @@ async function main() {
     validate: (v2) => v2.trim() ? void 0 : "required"
   });
   if (lD(server)) return ue("Cancelled.");
-  const cfg = existing ? { ...existing, name: name.trim(), server: server.trim() } : newConfig(name.trim(), { server: server.trim() });
+  const token = await re({
+    message: "Ingest token (leave blank if the server is open)"
+  });
+  if (lD(token)) return ue("Cancelled.");
+  const tokenValue = token.trim() || existing?.token || void 0;
+  const cfg = existing ? {
+    ...existing,
+    name: name.trim(),
+    server: server.trim(),
+    token: tokenValue
+  } : newConfig(name.trim(), {
+    server: server.trim(),
+    token: tokenValue
+  });
   const cwd = resolve2(process.cwd());
   const optOut = await se({
     message: `Tracking is ON for every project. Opt THIS project out?  ${import_picocolors3.default.dim(cwd)}`,
@@ -687,6 +743,7 @@ async function main() {
     [
       `${import_picocolors3.default.bold("Name")}       ${cfg.name}`,
       `${import_picocolors3.default.bold("Server")}     ${cfg.server}`,
+      `${import_picocolors3.default.bold("Token")}      ${cfg.token ? import_picocolors3.default.green("set") : import_picocolors3.default.dim("(none)")}`,
       `${import_picocolors3.default.bold("Tracking")}   ${import_picocolors3.default.green("ON by default")} for all projects`,
       `${import_picocolors3.default.bold("Opted out")}  ${cfg.optOutProjects.length ? cfg.optOutProjects.join("\n             ") : "(none)"}`,
       `${import_picocolors3.default.bold("Config")}     ${CONFIG_PATH}`
