@@ -153,13 +153,14 @@ var require_picocolors = __commonJS({
   }
 });
 
-// src/setup.ts
-import { userInfo } from "node:os";
+// src/projects.ts
+import { readdir, readFile as readFile2 } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { join as join2, sep as sep2, resolve as resolve2 } from "node:path";
 
 // ../node_modules/.pnpm/@clack+core@0.3.5/node_modules/@clack/core/dist/index.mjs
 var import_sisteransi = __toESM(require_src(), 1);
 import { stdin as $, stdout as k } from "node:process";
-var import_picocolors = __toESM(require_picocolors(), 1);
 import _ from "node:readline";
 import { WriteStream as U } from "node:tty";
 function q({ onlyFirst: e2 = false } = {}) {
@@ -446,51 +447,45 @@ var x = class {
     }
   }
 };
-var mD = Object.defineProperty;
-var dD = (e2, u, F) => u in e2 ? mD(e2, u, { enumerable: true, configurable: true, writable: true, value: F }) : e2[u] = F;
-var Y = (e2, u, F) => (dD(e2, typeof u != "symbol" ? u + "" : u, F), F);
-var bD = class extends x {
-  constructor({ mask: u, ...F }) {
-    super(F), Y(this, "valueWithCursor", ""), Y(this, "_mask", "\u2022"), this._mask = u ?? "\u2022", this.on("finalize", () => {
-      this.valueWithCursor = this.masked;
-    }), this.on("value", () => {
-      if (this.cursor >= this.value.length) this.valueWithCursor = `${this.masked}${import_picocolors.default.inverse(import_picocolors.default.hidden("_"))}`;
-      else {
-        const t = this.masked.slice(0, this.cursor), s = this.masked.slice(this.cursor);
-        this.valueWithCursor = `${t}${import_picocolors.default.inverse(s[0])}${s.slice(1)}`;
-      }
-    });
-  }
-  get cursor() {
-    return this._cursor;
-  }
-  get masked() {
-    return this.value.replaceAll(/./g, this._mask);
-  }
-};
-var TD = Object.defineProperty;
-var jD = (e2, u, F) => u in e2 ? TD(e2, u, { enumerable: true, configurable: true, writable: true, value: F }) : e2[u] = F;
-var MD = (e2, u, F) => (jD(e2, typeof u != "symbol" ? u + "" : u, F), F);
-var PD = class extends x {
+var fD = Object.defineProperty;
+var gD = (e2, u, F) => u in e2 ? fD(e2, u, { enumerable: true, configurable: true, writable: true, value: F }) : e2[u] = F;
+var K = (e2, u, F) => (gD(e2, typeof u != "symbol" ? u + "" : u, F), F);
+var vD = class extends x {
   constructor(u) {
-    super(u), MD(this, "valueWithCursor", ""), this.on("finalize", () => {
-      this.value || (this.value = u.defaultValue), this.valueWithCursor = this.value;
-    }), this.on("value", () => {
-      if (this.cursor >= this.value.length) this.valueWithCursor = `${this.value}${import_picocolors.default.inverse(import_picocolors.default.hidden("_"))}`;
-      else {
-        const F = this.value.slice(0, this.cursor), t = this.value.slice(this.cursor);
-        this.valueWithCursor = `${F}${import_picocolors.default.inverse(t[0])}${t.slice(1)}`;
+    super(u, false), K(this, "options"), K(this, "cursor", 0), this.options = u.options, this.value = [...u.initialValues ?? []], this.cursor = Math.max(this.options.findIndex(({ value: F }) => F === u.cursorAt), 0), this.on("key", (F) => {
+      F === "a" && this.toggleAll();
+    }), this.on("cursor", (F) => {
+      switch (F) {
+        case "left":
+        case "up":
+          this.cursor = this.cursor === 0 ? this.options.length - 1 : this.cursor - 1;
+          break;
+        case "down":
+        case "right":
+          this.cursor = this.cursor === this.options.length - 1 ? 0 : this.cursor + 1;
+          break;
+        case "space":
+          this.toggleValue();
+          break;
       }
     });
   }
-  get cursor() {
-    return this._cursor;
+  get _value() {
+    return this.options[this.cursor].value;
+  }
+  toggleAll() {
+    const u = this.value.length === this.options.length;
+    this.value = u ? [] : this.options.map((F) => F.value);
+  }
+  toggleValue() {
+    const u = this.value.includes(this._value);
+    this.value = u ? this.value.filter((F) => F !== this._value) : [...this.value, this._value];
   }
 };
 var WD = globalThis.process.platform.startsWith("win");
 
 // ../node_modules/.pnpm/@clack+prompts@0.7.0/node_modules/@clack/prompts/dist/index.mjs
-var import_picocolors2 = __toESM(require_picocolors(), 1);
+var import_picocolors = __toESM(require_picocolors(), 1);
 var import_sisteransi2 = __toESM(require_src(), 1);
 import h from "node:process";
 function q2() {
@@ -502,7 +497,7 @@ var H = o("\u25C6", "*");
 var I2 = o("\u25A0", "x");
 var x2 = o("\u25B2", "x");
 var S2 = o("\u25C7", "o");
-var K = o("\u250C", "T");
+var K2 = o("\u250C", "T");
 var a2 = o("\u2502", "|");
 var d2 = o("\u2514", "\u2014");
 var b2 = o("\u25CF", ">");
@@ -516,89 +511,90 @@ var Z = o("\u256E", "+");
 var z2 = o("\u251C", "+");
 var X2 = o("\u256F", "+");
 var J2 = o("\u25CF", "\u2022");
-var Y2 = o("\u25C6", "*");
+var Y = o("\u25C6", "*");
 var Q2 = o("\u25B2", "!");
 var ee = o("\u25A0", "x");
 var y2 = (r2) => {
   switch (r2) {
     case "initial":
     case "active":
-      return import_picocolors2.default.cyan(H);
+      return import_picocolors.default.cyan(H);
     case "cancel":
-      return import_picocolors2.default.red(I2);
+      return import_picocolors.default.red(I2);
     case "error":
-      return import_picocolors2.default.yellow(x2);
+      return import_picocolors.default.yellow(x2);
     case "submit":
-      return import_picocolors2.default.green(S2);
+      return import_picocolors.default.green(S2);
   }
 };
-var te = (r2) => new PD({ validate: r2.validate, placeholder: r2.placeholder, defaultValue: r2.defaultValue, initialValue: r2.initialValue, render() {
-  const n = `${import_picocolors2.default.gray(a2)}
+var ae = (r2) => {
+  const n = (i, t) => {
+    const s = i.label ?? String(i.value);
+    return t === "active" ? `${import_picocolors.default.cyan(C)} ${s} ${i.hint ? import_picocolors.default.dim(`(${i.hint})`) : ""}` : t === "selected" ? `${import_picocolors.default.green(w2)} ${import_picocolors.default.dim(s)}` : t === "cancelled" ? `${import_picocolors.default.strikethrough(import_picocolors.default.dim(s))}` : t === "active-selected" ? `${import_picocolors.default.green(w2)} ${s} ${i.hint ? import_picocolors.default.dim(`(${i.hint})`) : ""}` : t === "submitted" ? `${import_picocolors.default.dim(s)}` : `${import_picocolors.default.dim(M2)} ${import_picocolors.default.dim(s)}`;
+  };
+  return new vD({ options: r2.options, initialValues: r2.initialValues, required: r2.required ?? true, cursorAt: r2.cursorAt, validate(i) {
+    if (this.required && i.length === 0) return `Please select at least one option.
+${import_picocolors.default.reset(import_picocolors.default.dim(`Press ${import_picocolors.default.gray(import_picocolors.default.bgWhite(import_picocolors.default.inverse(" space ")))} to select, ${import_picocolors.default.gray(import_picocolors.default.bgWhite(import_picocolors.default.inverse(" enter ")))} to submit`))}`;
+  }, render() {
+    let i = `${import_picocolors.default.gray(a2)}
 ${y2(this.state)}  ${r2.message}
-`, i = r2.placeholder ? import_picocolors2.default.inverse(r2.placeholder[0]) + import_picocolors2.default.dim(r2.placeholder.slice(1)) : import_picocolors2.default.inverse(import_picocolors2.default.hidden("_")), t = this.value ? this.valueWithCursor : i;
-  switch (this.state) {
-    case "error":
-      return `${n.trim()}
-${import_picocolors2.default.yellow(a2)}  ${t}
-${import_picocolors2.default.yellow(d2)}  ${import_picocolors2.default.yellow(this.error)}
 `;
-    case "submit":
-      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.dim(this.value || r2.placeholder)}`;
-    case "cancel":
-      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.strikethrough(import_picocolors2.default.dim(this.value ?? ""))}${this.value?.trim() ? `
-` + import_picocolors2.default.gray(a2) : ""}`;
-    default:
-      return `${n}${import_picocolors2.default.cyan(a2)}  ${t}
-${import_picocolors2.default.cyan(d2)}
+    switch (this.state) {
+      case "submit":
+        return `${i}${import_picocolors.default.gray(a2)}  ${this.options.filter(({ value: t }) => this.value.includes(t)).map((t) => n(t, "submitted")).join(import_picocolors.default.dim(", ")) || import_picocolors.default.dim("none")}`;
+      case "cancel": {
+        const t = this.options.filter(({ value: s }) => this.value.includes(s)).map((s) => n(s, "cancelled")).join(import_picocolors.default.dim(", "));
+        return `${i}${import_picocolors.default.gray(a2)}  ${t.trim() ? `${t}
+${import_picocolors.default.gray(a2)}` : ""}`;
+      }
+      case "error": {
+        const t = this.error.split(`
+`).map((s, c) => c === 0 ? `${import_picocolors.default.yellow(d2)}  ${import_picocolors.default.yellow(s)}` : `   ${s}`).join(`
+`);
+        return i + import_picocolors.default.yellow(a2) + "  " + this.options.map((s, c) => {
+          const l2 = this.value.includes(s.value), u = c === this.cursor;
+          return u && l2 ? n(s, "active-selected") : l2 ? n(s, "selected") : n(s, u ? "active" : "inactive");
+        }).join(`
+${import_picocolors.default.yellow(a2)}  `) + `
+` + t + `
 `;
-  }
-} }).prompt();
-var re = (r2) => new bD({ validate: r2.validate, mask: r2.mask ?? U2, render() {
-  const n = `${import_picocolors2.default.gray(a2)}
-${y2(this.state)}  ${r2.message}
-`, i = this.valueWithCursor, t = this.masked;
-  switch (this.state) {
-    case "error":
-      return `${n.trim()}
-${import_picocolors2.default.yellow(a2)}  ${t}
-${import_picocolors2.default.yellow(d2)}  ${import_picocolors2.default.yellow(this.error)}
+      }
+      default:
+        return `${i}${import_picocolors.default.cyan(a2)}  ${this.options.map((t, s) => {
+          const c = this.value.includes(t.value), l2 = s === this.cursor;
+          return l2 && c ? n(t, "active-selected") : c ? n(t, "selected") : n(t, l2 ? "active" : "inactive");
+        }).join(`
+${import_picocolors.default.cyan(a2)}  `)}
+${import_picocolors.default.cyan(d2)}
 `;
-    case "submit":
-      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.dim(t)}`;
-    case "cancel":
-      return `${n}${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.strikethrough(import_picocolors2.default.dim(t ?? ""))}${t ? `
-` + import_picocolors2.default.gray(a2) : ""}`;
-    default:
-      return `${n}${import_picocolors2.default.cyan(a2)}  ${i}
-${import_picocolors2.default.cyan(d2)}
-`;
-  }
-} }).prompt();
+    }
+  } }).prompt();
+};
 var R2 = (r2) => r2.replace(me(), "");
 var le = (r2 = "", n = "") => {
   const i = `
 ${r2}
 `.split(`
-`), t = R2(n).length, s = Math.max(i.reduce((l2, u) => (u = R2(u), u.length > l2 ? u.length : l2), 0), t) + 2, c2 = i.map((l2) => `${import_picocolors2.default.gray(a2)}  ${import_picocolors2.default.dim(l2)}${" ".repeat(s - R2(l2).length)}${import_picocolors2.default.gray(a2)}`).join(`
+`), t = R2(n).length, s = Math.max(i.reduce((l2, u) => (u = R2(u), u.length > l2 ? u.length : l2), 0), t) + 2, c = i.map((l2) => `${import_picocolors.default.gray(a2)}  ${import_picocolors.default.dim(l2)}${" ".repeat(s - R2(l2).length)}${import_picocolors.default.gray(a2)}`).join(`
 `);
-  process.stdout.write(`${import_picocolors2.default.gray(a2)}
-${import_picocolors2.default.green(S2)}  ${import_picocolors2.default.reset(n)} ${import_picocolors2.default.gray(B.repeat(Math.max(s - t - 1, 1)) + Z)}
-${c2}
-${import_picocolors2.default.gray(z2 + B.repeat(s + 2) + X2)}
+  process.stdout.write(`${import_picocolors.default.gray(a2)}
+${import_picocolors.default.green(S2)}  ${import_picocolors.default.reset(n)} ${import_picocolors.default.gray(B.repeat(Math.max(s - t - 1, 1)) + Z)}
+${c}
+${import_picocolors.default.gray(z2 + B.repeat(s + 2) + X2)}
 `);
 };
 var ue = (r2 = "") => {
-  process.stdout.write(`${import_picocolors2.default.gray(d2)}  ${import_picocolors2.default.red(r2)}
+  process.stdout.write(`${import_picocolors.default.gray(d2)}  ${import_picocolors.default.red(r2)}
 
 `);
 };
 var oe = (r2 = "") => {
-  process.stdout.write(`${import_picocolors2.default.gray(K)}  ${r2}
+  process.stdout.write(`${import_picocolors.default.gray(K2)}  ${r2}
 `);
 };
 var $e = (r2 = "") => {
-  process.stdout.write(`${import_picocolors2.default.gray(a2)}
-${import_picocolors2.default.gray(d2)}  ${r2}
+  process.stdout.write(`${import_picocolors.default.gray(a2)}
+${import_picocolors.default.gray(d2)}  ${r2}
 
 `);
 };
@@ -607,8 +603,8 @@ function me() {
   return new RegExp(r2, "g");
 }
 
-// src/setup.ts
-var import_picocolors3 = __toESM(require_picocolors(), 1);
+// src/projects.ts
+var import_picocolors2 = __toESM(require_picocolors(), 1);
 
 // src/config.ts
 import { readFile, writeFile, access } from "node:fs/promises";
@@ -642,51 +638,91 @@ async function loadConfig() {
 async function saveConfig(cfg) {
   await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n", "utf8");
 }
-function newConfig(name, overrides = {}) {
-  return {
-    name,
-    ...DEFAULTS,
-    ...overrides
-  };
-}
 
-// src/setup.ts
+// src/projects.ts
+var PROJECTS_DIR = join2(homedir2(), ".claude", "projects");
+async function cwdOf(dir, files) {
+  for (const f of files) {
+    try {
+      const raw = await readFile2(join2(dir, f), "utf8");
+      for (const line of raw.split("\n")) {
+        if (!line.trim()) continue;
+        const e2 = JSON.parse(line);
+        if (e2.cwd) return e2.cwd;
+        break;
+      }
+    } catch {
+    }
+  }
+  return void 0;
+}
+async function discover() {
+  let dirs;
+  try {
+    dirs = await readdir(PROJECTS_DIR);
+  } catch {
+    return [];
+  }
+  const byCwd = /* @__PURE__ */ new Map();
+  for (const d3 of dirs) {
+    const full = join2(PROJECTS_DIR, d3);
+    let files;
+    try {
+      files = (await readdir(full)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    if (!files.length) continue;
+    const cwd = await cwdOf(full, files);
+    if (!cwd) continue;
+    const existing = byCwd.get(cwd);
+    if (existing) existing.sessions += files.length;
+    else byCwd.set(cwd, { cwd, label: cwd.replace(homedir2(), "~"), sessions: files.length });
+  }
+  return [...byCwd.values()].sort((a3, b3) => b3.sessions - a3.sessions);
+}
+function isExcluded(cwd, optOut) {
+  const d3 = resolve2(cwd);
+  return optOut.some((root) => {
+    const r2 = resolve2(root);
+    return d3 === r2 || d3.startsWith(r2 + sep2);
+  });
+}
 async function main() {
-  oe(import_picocolors3.default.bgCyan(import_picocolors3.default.black(" ClaudeLens setup ")));
-  const existing = await loadConfig();
-  const name = await te({
-    message: "Your name (shown as the author on the dashboard)",
-    initialValue: existing?.name ?? userInfo().username,
-    validate: (v2) => v2.trim() ? void 0 : "required"
+  oe(import_picocolors2.default.bgCyan(import_picocolors2.default.black(" ClaudeLens \xB7 projects ")));
+  const cfg = await loadConfig();
+  if (!cfg) {
+    ue("Not set up yet \u2014 run /claudelens:setup first.");
+    return;
+  }
+  const projects = await discover();
+  if (!projects.length) {
+    ue(`No Claude Code projects found in ${PROJECTS_DIR}.`);
+    return;
+  }
+  const tracked = await ae({
+    message: "Which projects should ClaudeLens track?",
+    options: projects.map((pr) => ({
+      value: pr.cwd,
+      label: pr.label,
+      hint: `${pr.sessions} session${pr.sessions === 1 ? "" : "s"}`
+    })),
+    initialValues: projects.filter((pr) => !isExcluded(pr.cwd, cfg.optOutProjects)).map((pr) => pr.cwd),
+    required: false
   });
-  if (lD(name)) return ue("Cancelled.");
-  const server = await te({
-    message: "ClaudeLens server URL",
-    initialValue: existing?.server ?? "http://localhost:4000",
-    validate: (v2) => v2.trim() ? void 0 : "required"
-  });
-  if (lD(server)) return ue("Cancelled.");
-  const token = await re({
-    message: "Ingest token (blank = keep current / open server)"
-  });
-  if (lD(token)) return ue("Cancelled.");
-  const tokenValue = token.trim() || existing?.token || void 0;
-  const cfg = existing ? { ...existing, name: name.trim(), server: server.trim(), token: tokenValue } : newConfig(name.trim(), { server: server.trim(), token: tokenValue });
+  if (lD(tracked)) return ue("Cancelled \u2014 nothing changed.");
+  const keep = new Set(tracked);
+  cfg.optOutProjects = projects.filter((pr) => !keep.has(pr.cwd)).map((pr) => pr.cwd);
   await saveConfig(cfg);
+  const excluded = projects.length - keep.size;
   le(
     [
-      `${import_picocolors3.default.bold("Name")}     ${cfg.name}`,
-      `${import_picocolors3.default.bold("Server")}   ${cfg.server}`,
-      `${import_picocolors3.default.bold("Token")}    ${cfg.token ? import_picocolors3.default.green("set") : import_picocolors3.default.dim("(none)")}`,
-      `${import_picocolors3.default.bold("Tracking")} ${import_picocolors3.default.green("ON")} for all projects`,
-      cfg.optOutProjects.length ? `${import_picocolors3.default.bold("Excluded")} ${cfg.optOutProjects.length} project(s)` : "",
-      `${import_picocolors3.default.bold("Config")}   ${CONFIG_PATH}`
-    ].filter(Boolean).join("\n"),
+      `${import_picocolors2.default.green("Tracking")}  ${keep.size} project(s)`,
+      `${import_picocolors2.default.yellow("Excluded")}  ${excluded} project(s)`
+    ].join("\n"),
     "Saved"
   );
-  $e(
-    import_picocolors3.default.green("Setup complete \u2014 your sessions sync automatically.") + "\n" + import_picocolors3.default.dim("Choose which projects to track/exclude:  ") + import_picocolors3.default.cyan("/claudelens:projects")
-  );
+  $e(import_picocolors2.default.dim("Excluded projects stop syncing immediately; tracked ones resume on the next turn."));
 }
 main().catch((err) => {
   console.error(err);

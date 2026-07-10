@@ -6,13 +6,15 @@
   "bin": {
     "claudelens": "src/index.ts",
     "claudelens-setup": "src/setup.ts",
-    "claudelens-sync": "src/sync.ts"
+    "claudelens-sync": "src/sync.ts",
+    "claudelens-projects": "src/projects.ts"
   },
   "scripts": {
     "start": "tsx src/index.ts",
     "setup": "tsx src/setup.ts",
     "sync": "tsx src/sync.ts",
-    "build:plugin": "esbuild src/sync.ts src/setup.ts src/index.ts --bundle --platform=node --format=esm --target=node20 --outdir=../plugin/dist --out-extension:.js=.mjs",
+    "projects": "tsx src/projects.ts",
+    "build:plugin": "esbuild src/sync.ts src/setup.ts src/projects.ts src/index.ts --bundle --platform=node --format=esm --target=node20 --outdir=../plugin/dist --out-extension:.js=.mjs",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
