@@ -1,11 +1,34 @@
-// `claudelens track [path]` — start tracking a project (defaults to the current
-// directory). From then on, sessions in that project (and its subfolders) sync.
-import { resolve } from 'node:path';
+// Manage per-project exclusions. Tracking is ON BY DEFAULT, so these commands
+// are about opting OUT (and back in):
+//
+//   claudelens untrack [dir]            stop tracking a project (this machine)
+//   claudelens untrack [dir] --shared   also write a committed .claudelens so the
+//                                        repo is excluded for the WHOLE team
+//   claudelens track   [dir]            resume tracking a project you'd excluded
+//   claudelens track   [dir] --shared   also remove the committed .claudelens
+import { resolve, join } from 'node:path';
 import { homedir } from 'node:os';
+import { writeFile, unlink } from 'node:fs/promises';
 import pc from 'picocolors';
-import { loadConfig, saveConfig, isUnderAny } from './config.js';
+import { loadConfig, saveConfig, isExcludedLocally, REPO_MARKER } from './config.js';
 
 const pretty = (d: string) => d.replace(homedir(), '~');
+
+/** Split argv after the subcommand into an optional path and a --shared flag. */
+function parseArgs(): { dir: string; shared: boolean } {
+  const args = process.argv.slice(3);
+  const shared = args.includes('--shared') || args.includes('--repo');
+  const positional = args.find((a) => !a.startsWith('-'));
+  return { dir: resolve(positional ?? process.cwd()), shared };
+}
+
+function reviewHint(reviewed: boolean) {
+  if (!reviewed) {
+    console.log(
+      pc.dim('  Finish switching tracking on with ') + pc.cyan('claudelens projects') + pc.dim('.'),
+    );
+  }
+}
 
 export async function runTrack() {
   const cfg = await loadConfig();
@@ -13,16 +36,29 @@ export async function runTrack() {
     console.error(pc.yellow('Not set up yet — run `claudelens setup` first.'));
     process.exit(1);
   }
-  const dir = resolve(process.argv[3] ?? process.cwd());
+  const { dir, shared } = parseArgs();
 
-  if (isUnderAny(dir, cfg.trackProjects)) {
-    console.log(pc.dim(`Already tracking ${pretty(dir)}`));
-    return;
-  }
-  cfg.trackProjects.push(dir);
+  const wasExcluded = cfg.ignoreProjects.some((p) => resolve(p) === dir);
+  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve(p) !== dir);
   await saveConfig(cfg);
-  console.log(pc.green(`\n  ✔ Now tracking  ${pretty(dir)}`));
-  console.log(pc.dim('  Sessions here (and in subfolders) sync from the next turn on.\n'));
+
+  if (shared) {
+    try {
+      await unlink(join(dir, REPO_MARKER));
+      console.log(pc.dim(`  Removed committed ${REPO_MARKER} — repo tracked for the team again.`));
+    } catch {
+      /* nothing to remove */
+    }
+  }
+
+  if (wasExcluded || shared) {
+    console.log(pc.green(`\n  ✔ Tracking  ${pretty(dir)}`));
+    console.log(pc.dim('  Sessions here (and in subfolders) sync from the next turn on.'));
+  } else {
+    console.log(pc.dim(`Already tracking ${pretty(dir)} (tracking is on by default).`));
+  }
+  reviewHint(cfg.trackingReviewed);
+  console.log('');
 }
 
 export async function runUntrack() {
@@ -31,14 +67,23 @@ export async function runUntrack() {
     console.error(pc.yellow('Not set up yet — run `claudelens setup` first.'));
     process.exit(1);
   }
-  const dir = resolve(process.argv[3] ?? process.cwd());
-  const before = cfg.trackProjects.length;
-  cfg.trackProjects = cfg.trackProjects.filter((p) => resolve(p) !== dir);
+  const { dir, shared } = parseArgs();
 
-  if (cfg.trackProjects.length === before) {
-    console.log(pc.dim(`${pretty(dir)} wasn't being tracked.`));
-    return;
+  if (!isExcludedLocally(dir, cfg)) {
+    cfg.ignoreProjects.push(dir);
+    await saveConfig(cfg);
   }
-  await saveConfig(cfg);
-  console.log(pc.yellow(`\n  ✔ Stopped tracking  ${pretty(dir)}\n`));
+
+  if (shared) {
+    await writeFile(
+      join(dir, REPO_MARKER),
+      '# ClaudeLens: this repo is never tracked, for anyone. Commit this file.\nignore: true\n',
+      'utf8',
+    );
+    console.log(pc.yellow(`\n  ✔ Wrote ${REPO_MARKER} — commit it to exclude this repo team-wide.`));
+  } else {
+    console.log(pc.yellow(`\n  ✔ Stopped tracking  ${pretty(dir)}`));
+    console.log(pc.dim('  Sessions here stop syncing immediately (this machine only).'));
+  }
+  console.log('');
 }

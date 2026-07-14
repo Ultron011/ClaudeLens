@@ -9,11 +9,18 @@ function printHelp() {
 
 Usage: claudelens <command>
 
-  track [dir]    Start tracking a project (defaults to the current directory)
-  untrack [dir]  Stop tracking a project
-  projects       Edit tracked projects (interactive checklist)
-  status         Show current config and tracked projects
-  setup          Configure your name, server URL and token
+Tracking is ON by default — every project syncs unless you opt it out.
+
+  untrack [dir]  Stop tracking a project  (add --shared to write a committed
+                 .claudelens that excludes the repo for the whole team)
+  track [dir]    Resume tracking a project you'd excluded  (--shared removes the
+                 committed .claudelens)
+  projects       Review tracked projects (interactive checklist — untick to exclude)
+  sessions [dir] Exclude individual sessions in a project (interactive checklist)
+  pause          Kill-switch: stop ALL syncing without losing your exclusions
+  resume         Turn syncing back on
+  status         Show current config and what's tracked vs excluded
+  setup          Configure your name, server URL and token, then review tracking
   update         Pull the latest code + rebuild — no plugin reinstall
   install        Add the 'claudelens' command to your PATH (~/.local/bin)
   publish        Manually pick and publish one past session
@@ -32,6 +39,12 @@ async function main() {
       return (await import('./track.js')).runUntrack();
     case 'projects':
       return (await import('./projects.js')).runProjects();
+    case 'sessions':
+      return (await import('./sessions.js')).runSessions();
+    case 'pause':
+      return (await import('./pause.js')).runPause();
+    case 'resume':
+      return (await import('./pause.js')).runResume();
     case 'status':
       return (await import('./status.js')).runStatus();
     case 'update':

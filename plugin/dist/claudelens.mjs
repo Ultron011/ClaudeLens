@@ -109,50 +109,50 @@ var require_picocolors = __commonJS({
       return result + string.substring(cursor);
     };
     var createColors = (enabled = isColorSupported) => {
-      let f2 = enabled ? formatter : () => String;
+      let f3 = enabled ? formatter : () => String;
       return {
         isColorSupported: enabled,
-        reset: f2("\x1B[0m", "\x1B[0m"),
-        bold: f2("\x1B[1m", "\x1B[22m", "\x1B[22m\x1B[1m"),
-        dim: f2("\x1B[2m", "\x1B[22m", "\x1B[22m\x1B[2m"),
-        italic: f2("\x1B[3m", "\x1B[23m"),
-        underline: f2("\x1B[4m", "\x1B[24m"),
-        inverse: f2("\x1B[7m", "\x1B[27m"),
-        hidden: f2("\x1B[8m", "\x1B[28m"),
-        strikethrough: f2("\x1B[9m", "\x1B[29m"),
-        black: f2("\x1B[30m", "\x1B[39m"),
-        red: f2("\x1B[31m", "\x1B[39m"),
-        green: f2("\x1B[32m", "\x1B[39m"),
-        yellow: f2("\x1B[33m", "\x1B[39m"),
-        blue: f2("\x1B[34m", "\x1B[39m"),
-        magenta: f2("\x1B[35m", "\x1B[39m"),
-        cyan: f2("\x1B[36m", "\x1B[39m"),
-        white: f2("\x1B[37m", "\x1B[39m"),
-        gray: f2("\x1B[90m", "\x1B[39m"),
-        bgBlack: f2("\x1B[40m", "\x1B[49m"),
-        bgRed: f2("\x1B[41m", "\x1B[49m"),
-        bgGreen: f2("\x1B[42m", "\x1B[49m"),
-        bgYellow: f2("\x1B[43m", "\x1B[49m"),
-        bgBlue: f2("\x1B[44m", "\x1B[49m"),
-        bgMagenta: f2("\x1B[45m", "\x1B[49m"),
-        bgCyan: f2("\x1B[46m", "\x1B[49m"),
-        bgWhite: f2("\x1B[47m", "\x1B[49m"),
-        blackBright: f2("\x1B[90m", "\x1B[39m"),
-        redBright: f2("\x1B[91m", "\x1B[39m"),
-        greenBright: f2("\x1B[92m", "\x1B[39m"),
-        yellowBright: f2("\x1B[93m", "\x1B[39m"),
-        blueBright: f2("\x1B[94m", "\x1B[39m"),
-        magentaBright: f2("\x1B[95m", "\x1B[39m"),
-        cyanBright: f2("\x1B[96m", "\x1B[39m"),
-        whiteBright: f2("\x1B[97m", "\x1B[39m"),
-        bgBlackBright: f2("\x1B[100m", "\x1B[49m"),
-        bgRedBright: f2("\x1B[101m", "\x1B[49m"),
-        bgGreenBright: f2("\x1B[102m", "\x1B[49m"),
-        bgYellowBright: f2("\x1B[103m", "\x1B[49m"),
-        bgBlueBright: f2("\x1B[104m", "\x1B[49m"),
-        bgMagentaBright: f2("\x1B[105m", "\x1B[49m"),
-        bgCyanBright: f2("\x1B[106m", "\x1B[49m"),
-        bgWhiteBright: f2("\x1B[107m", "\x1B[49m")
+        reset: f3("\x1B[0m", "\x1B[0m"),
+        bold: f3("\x1B[1m", "\x1B[22m", "\x1B[22m\x1B[1m"),
+        dim: f3("\x1B[2m", "\x1B[22m", "\x1B[22m\x1B[2m"),
+        italic: f3("\x1B[3m", "\x1B[23m"),
+        underline: f3("\x1B[4m", "\x1B[24m"),
+        inverse: f3("\x1B[7m", "\x1B[27m"),
+        hidden: f3("\x1B[8m", "\x1B[28m"),
+        strikethrough: f3("\x1B[9m", "\x1B[29m"),
+        black: f3("\x1B[30m", "\x1B[39m"),
+        red: f3("\x1B[31m", "\x1B[39m"),
+        green: f3("\x1B[32m", "\x1B[39m"),
+        yellow: f3("\x1B[33m", "\x1B[39m"),
+        blue: f3("\x1B[34m", "\x1B[39m"),
+        magenta: f3("\x1B[35m", "\x1B[39m"),
+        cyan: f3("\x1B[36m", "\x1B[39m"),
+        white: f3("\x1B[37m", "\x1B[39m"),
+        gray: f3("\x1B[90m", "\x1B[39m"),
+        bgBlack: f3("\x1B[40m", "\x1B[49m"),
+        bgRed: f3("\x1B[41m", "\x1B[49m"),
+        bgGreen: f3("\x1B[42m", "\x1B[49m"),
+        bgYellow: f3("\x1B[43m", "\x1B[49m"),
+        bgBlue: f3("\x1B[44m", "\x1B[49m"),
+        bgMagenta: f3("\x1B[45m", "\x1B[49m"),
+        bgCyan: f3("\x1B[46m", "\x1B[49m"),
+        bgWhite: f3("\x1B[47m", "\x1B[49m"),
+        blackBright: f3("\x1B[90m", "\x1B[39m"),
+        redBright: f3("\x1B[91m", "\x1B[39m"),
+        greenBright: f3("\x1B[92m", "\x1B[39m"),
+        yellowBright: f3("\x1B[93m", "\x1B[39m"),
+        blueBright: f3("\x1B[94m", "\x1B[39m"),
+        magentaBright: f3("\x1B[95m", "\x1B[39m"),
+        cyanBright: f3("\x1B[96m", "\x1B[39m"),
+        whiteBright: f3("\x1B[97m", "\x1B[39m"),
+        bgBlackBright: f3("\x1B[100m", "\x1B[49m"),
+        bgRedBright: f3("\x1B[101m", "\x1B[49m"),
+        bgGreenBright: f3("\x1B[102m", "\x1B[49m"),
+        bgYellowBright: f3("\x1B[103m", "\x1B[49m"),
+        bgBlueBright: f3("\x1B[104m", "\x1B[49m"),
+        bgMagentaBright: f3("\x1B[105m", "\x1B[49m"),
+        bgCyanBright: f3("\x1B[106m", "\x1B[49m"),
+        bgWhiteBright: f3("\x1B[107m", "\x1B[49m")
       };
     };
     module.exports = createColors();
@@ -606,7 +606,7 @@ function me() {
   const r2 = ["[\\u001B\\u009B][[\\]()#;?]*(?:(?:(?:(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]+)*|[a-zA-Z\\d]+(?:;[-a-zA-Z\\d\\/#&.:=?%@~_]*)*)?\\u0007)", "(?:(?:\\d{1,4}(?:;\\d{0,4})*)?[\\dA-PR-TZcf-nq-uy=><~]))"].join("|");
   return new RegExp(r2, "g");
 }
-var import_picocolors2, import_sisteransi2, _2, o, H, I2, x2, S2, K2, a2, d2, b2, E, C, w2, M2, U2, B, Z2, z2, X2, J2, Y2, Q2, ee, y2, te, re, se, ie, ae, R2, le, ue, oe, $e, de;
+var import_picocolors2, import_sisteransi2, _2, o, H, I2, x2, S2, K2, a2, d2, b2, E, C, w2, M2, U2, B, Z2, z2, X2, J2, Y2, Q2, ee, y2, te, re, se, ie, ae, R2, le, ue, oe, $e, f2, de;
 var init_dist2 = __esm({
   "../node_modules/.pnpm/@clack+prompts@0.7.0/node_modules/@clack/prompts/dist/index.mjs"() {
     init_dist();
@@ -809,6 +809,29 @@ ${import_picocolors2.default.gray(d2)}  ${r2}
 
 `);
     };
+    f2 = { message: (r2 = "", { symbol: n = import_picocolors2.default.gray(a2) } = {}) => {
+      const i = [`${import_picocolors2.default.gray(a2)}`];
+      if (r2) {
+        const [t, ...s] = r2.split(`
+`);
+        i.push(`${n}  ${t}`, ...s.map((c2) => `${import_picocolors2.default.gray(a2)}  ${c2}`));
+      }
+      process.stdout.write(`${i.join(`
+`)}
+`);
+    }, info: (r2) => {
+      f2.message(r2, { symbol: import_picocolors2.default.blue(J2) });
+    }, success: (r2) => {
+      f2.message(r2, { symbol: import_picocolors2.default.green(Y2) });
+    }, step: (r2) => {
+      f2.message(r2, { symbol: import_picocolors2.default.green(S2) });
+    }, warn: (r2) => {
+      f2.message(r2, { symbol: import_picocolors2.default.yellow(Q2) });
+    }, warning: (r2) => {
+      f2.warn(r2);
+    }, error: (r2) => {
+      f2.message(r2, { symbol: import_picocolors2.default.red(ee) });
+    } };
     de = () => {
       const r2 = _2 ? ["\u25D2", "\u25D0", "\u25D3", "\u25D1"] : ["\u2022", "o", "O", "0"], n = _2 ? 80 : 120;
       let i, t, s = false, c2 = "";
@@ -839,7 +862,7 @@ ${import_picocolors2.default.gray(d2)}  ${r2}
 // src/config.ts
 import { readFile, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve, sep } from "node:path";
+import { join, resolve, sep, dirname, parse as parsePath } from "node:path";
 async function loadConfig() {
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
@@ -849,15 +872,21 @@ async function loadConfig() {
       name: parsed.name,
       server: parsed.server ?? DEFAULTS.server,
       token: parsed.token ?? DEFAULTS.token,
-      trackProjects: parsed.trackProjects ?? [],
-      redact: parsed.redact ?? DEFAULTS.redact
+      ignoreProjects: parsed.ignoreProjects ?? [],
+      ignoreSessions: parsed.ignoreSessions ?? [],
+      paused: parsed.paused ?? DEFAULTS.paused,
+      trackingReviewed: parsed.trackingReviewed ?? DEFAULTS.trackingReviewed,
+      redact: parsed.redact ?? DEFAULTS.redact,
+      // Preserved only so `setup` can migrate it; never written back once migrated.
+      trackProjects: parsed.trackProjects
     };
   } catch {
     return null;
   }
 }
 async function saveConfig(cfg) {
-  await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+  const { trackProjects: _legacy, ...clean } = cfg;
+  await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2) + "\n", "utf8");
 }
 function newConfig(name, overrides = {}) {
   return { name, ...DEFAULTS, ...overrides };
@@ -869,125 +898,66 @@ function isUnderAny(dir, roots) {
     return d3 === r2 || d3.startsWith(r2 + sep);
   });
 }
-function shouldTrack(cwd, cfg) {
-  return isUnderAny(cwd, cfg.trackProjects);
+function isExcludedLocally(cwd, cfg) {
+  return isUnderAny(cwd, cfg.ignoreProjects);
 }
-var CONFIG_PATH, DEFAULTS;
+function markerExcludes(raw) {
+  const text = raw.trim();
+  if (!text) return true;
+  try {
+    const j2 = JSON.parse(text);
+    if (typeof j2.ignore === "boolean") return j2.ignore;
+    if (typeof j2.track === "boolean") return !j2.track;
+  } catch {
+  }
+  for (const line of text.split("\n")) {
+    const m2 = /^\s*(ignore|track)\s*:\s*(true|false)\s*$/i.exec(line);
+    if (m2) {
+      const val = m2[2].toLowerCase() === "true";
+      return m2[1].toLowerCase() === "ignore" ? val : !val;
+    }
+  }
+  return true;
+}
+async function isRepoExcluded(dir) {
+  let cur = resolve(dir);
+  const fsRoot = parsePath(cur).root;
+  for (let i = 0; i < 40; i++) {
+    try {
+      const raw = await readFile(join(cur, REPO_MARKER), "utf8");
+      if (markerExcludes(raw)) return true;
+    } catch {
+    }
+    if (cur === fsRoot) break;
+    const parent = dirname(cur);
+    if (parent === cur) break;
+    cur = parent;
+  }
+  return false;
+}
+async function shouldSync(cwd, sessionId, cfg) {
+  if (cfg.paused) return false;
+  if (!cfg.trackingReviewed) return false;
+  if (isExcludedLocally(cwd, cfg)) return false;
+  if (sessionId && cfg.ignoreSessions.includes(sessionId)) return false;
+  if (await isRepoExcluded(cwd)) return false;
+  return true;
+}
+var CONFIG_PATH, REPO_MARKER, DEFAULTS;
 var init_config = __esm({
   "src/config.ts"() {
     "use strict";
     CONFIG_PATH = join(homedir(), ".claude", "claudelens.json");
+    REPO_MARKER = ".claudelens";
     DEFAULTS = {
       server: process.env.CLAUDELENS_SERVER ?? "http://localhost:4000",
       token: process.env.CLAUDELENS_TOKEN || void 0,
-      trackProjects: [],
+      ignoreProjects: [],
+      ignoreSessions: [],
+      paused: false,
+      trackingReviewed: false,
       redact: false
     };
-  }
-});
-
-// src/setup.ts
-var setup_exports = {};
-__export(setup_exports, {
-  runSetup: () => runSetup
-});
-import { userInfo } from "node:os";
-async function runSetup() {
-  oe(import_picocolors3.default.bgCyan(import_picocolors3.default.black(" ClaudeLens setup ")));
-  const existing = await loadConfig();
-  const name = await te({
-    message: "Your name (shown as the author on the dashboard)",
-    initialValue: existing?.name ?? userInfo().username,
-    validate: (v2) => v2.trim() ? void 0 : "required"
-  });
-  if (lD(name)) return ue("Cancelled.");
-  const server = await te({
-    message: "ClaudeLens server URL",
-    initialValue: existing?.server ?? "http://localhost:4000",
-    validate: (v2) => v2.trim() ? void 0 : "required"
-  });
-  if (lD(server)) return ue("Cancelled.");
-  const token = await re({
-    message: "Ingest token (blank = keep current / open server)"
-  });
-  if (lD(token)) return ue("Cancelled.");
-  const tokenValue = token.trim() || existing?.token || void 0;
-  const cfg = existing ? { ...existing, name: name.trim(), server: server.trim(), token: tokenValue } : newConfig(name.trim(), { server: server.trim(), token: tokenValue });
-  await saveConfig(cfg);
-  le(
-    [
-      `${import_picocolors3.default.bold("Name")}     ${cfg.name}`,
-      `${import_picocolors3.default.bold("Server")}   ${cfg.server}`,
-      `${import_picocolors3.default.bold("Token")}    ${cfg.token ? import_picocolors3.default.green("set") : import_picocolors3.default.dim("(none)")}`,
-      `${import_picocolors3.default.bold("Tracking")} ${cfg.trackProjects.length} project(s) opted in`,
-      `${import_picocolors3.default.bold("Config")}   ${CONFIG_PATH}`
-    ].join("\n"),
-    "Saved"
-  );
-  $e(
-    import_picocolors3.default.green("Setup complete.") + "\n" + import_picocolors3.default.dim("Nothing syncs until you opt a project in. Inside a project, run:  ") + import_picocolors3.default.cyan("claudelens track")
-  );
-}
-var import_picocolors3;
-var init_setup = __esm({
-  "src/setup.ts"() {
-    "use strict";
-    init_dist2();
-    import_picocolors3 = __toESM(require_picocolors(), 1);
-    init_config();
-  }
-});
-
-// src/track.ts
-var track_exports = {};
-__export(track_exports, {
-  runTrack: () => runTrack,
-  runUntrack: () => runUntrack
-});
-import { resolve as resolve2 } from "node:path";
-import { homedir as homedir2 } from "node:os";
-async function runTrack() {
-  const cfg = await loadConfig();
-  if (!cfg) {
-    console.error(import_picocolors4.default.yellow("Not set up yet \u2014 run `claudelens setup` first."));
-    process.exit(1);
-  }
-  const dir = resolve2(process.argv[3] ?? process.cwd());
-  if (isUnderAny(dir, cfg.trackProjects)) {
-    console.log(import_picocolors4.default.dim(`Already tracking ${pretty(dir)}`));
-    return;
-  }
-  cfg.trackProjects.push(dir);
-  await saveConfig(cfg);
-  console.log(import_picocolors4.default.green(`
-  \u2714 Now tracking  ${pretty(dir)}`));
-  console.log(import_picocolors4.default.dim("  Sessions here (and in subfolders) sync from the next turn on.\n"));
-}
-async function runUntrack() {
-  const cfg = await loadConfig();
-  if (!cfg) {
-    console.error(import_picocolors4.default.yellow("Not set up yet \u2014 run `claudelens setup` first."));
-    process.exit(1);
-  }
-  const dir = resolve2(process.argv[3] ?? process.cwd());
-  const before = cfg.trackProjects.length;
-  cfg.trackProjects = cfg.trackProjects.filter((p) => resolve2(p) !== dir);
-  if (cfg.trackProjects.length === before) {
-    console.log(import_picocolors4.default.dim(`${pretty(dir)} wasn't being tracked.`));
-    return;
-  }
-  await saveConfig(cfg);
-  console.log(import_picocolors4.default.yellow(`
-  \u2714 Stopped tracking  ${pretty(dir)}
-`));
-}
-var import_picocolors4, pretty;
-var init_track = __esm({
-  "src/track.ts"() {
-    "use strict";
-    import_picocolors4 = __toESM(require_picocolors(), 1);
-    init_config();
-    pretty = (d3) => d3.replace(homedir2(), "~");
   }
 });
 
@@ -996,15 +966,16 @@ var projects_exports = {};
 __export(projects_exports, {
   discover: () => discover,
   isTracked: () => isTracked,
+  reviewProjects: () => reviewProjects,
   runProjects: () => runProjects
 });
 import { readdir, readFile as readFile2 } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
-import { join as join2, resolve as resolve3 } from "node:path";
+import { homedir as homedir2 } from "node:os";
+import { join as join2, resolve as resolve2 } from "node:path";
 async function cwdOf(dir, files) {
-  for (const f2 of files) {
+  for (const f3 of files) {
     try {
-      const raw = await readFile2(join2(dir, f2), "utf8");
+      const raw = await readFile2(join2(dir, f3), "utf8");
       let scanned = 0;
       for (const line of raw.split("\n")) {
         if (!line.trim()) continue;
@@ -1032,7 +1003,7 @@ async function discover() {
     const full = join2(PROJECTS_DIR, d3);
     let files;
     try {
-      files = (await readdir(full)).filter((f2) => f2.endsWith(".jsonl"));
+      files = (await readdir(full)).filter((f3) => f3.endsWith(".jsonl"));
     } catch {
       continue;
     }
@@ -1041,196 +1012,233 @@ async function discover() {
     if (!cwd) continue;
     const existing = byCwd.get(cwd);
     if (existing) existing.sessions += files.length;
-    else byCwd.set(cwd, { cwd, label: cwd.replace(homedir3(), "~"), sessions: files.length });
+    else byCwd.set(cwd, { cwd, label: cwd.replace(homedir2(), "~"), sessions: files.length });
   }
-  return [...byCwd.values()].sort((a3, b3) => b3.sessions - a3.sessions);
+  const list = [...byCwd.values()].sort((a3, b3) => b3.sessions - a3.sessions);
+  return Promise.all(
+    list.map(async (pr) => ({ ...pr, repoExcluded: await isRepoExcluded(pr.cwd) }))
+  );
 }
-function isTracked(cwd, trackProjects) {
-  return isUnderAny(cwd, trackProjects);
+function isTracked(cwd, cfg) {
+  return !isExcludedLocally(cwd, cfg);
+}
+async function reviewProjects(cfg) {
+  const projects = await discover();
+  if (!projects.length) {
+    le(
+      import_picocolors3.default.dim(
+        `No Claude Code projects found yet in ${PROJECTS_DIR}.
+New projects will be tracked automatically once you use them.`
+      ),
+      "Tracking on"
+    );
+    cfg.trackingReviewed = true;
+    return true;
+  }
+  const toggleable = projects.filter((pr) => !pr.repoExcluded);
+  const lockedOut = projects.filter((pr) => pr.repoExcluded);
+  if (lockedOut.length) {
+    le(
+      lockedOut.map((pr) => `${import_picocolors3.default.dim("\xB7")} ${import_picocolors3.default.dim(pr.label)}`).join("\n"),
+      "Excluded by a committed .claudelens (team-wide)"
+    );
+  }
+  const tracked = await ae({
+    message: "Which projects should ClaudeLens track?  (everything is on by default \u2014 untick to exclude)",
+    options: toggleable.map((pr) => ({
+      value: pr.cwd,
+      label: pr.label,
+      hint: `${pr.sessions} session${pr.sessions === 1 ? "" : "s"}`
+    })),
+    initialValues: toggleable.filter((pr) => isTracked(pr.cwd, cfg)).map((pr) => pr.cwd),
+    required: false
+  });
+  if (lD(tracked)) return false;
+  const picked = new Set(tracked);
+  const discoveredCwds = new Set(toggleable.map((pr) => resolve2(pr.cwd)));
+  const untickedNow = toggleable.filter((pr) => !picked.has(pr.cwd)).map((pr) => pr.cwd);
+  const keptUndiscovered = cfg.ignoreProjects.filter((d3) => !discoveredCwds.has(resolve2(d3)));
+  cfg.ignoreProjects = [...untickedNow, ...keptUndiscovered];
+  cfg.trackingReviewed = true;
+  return true;
 }
 async function runProjects() {
-  oe(import_picocolors5.default.bgCyan(import_picocolors5.default.black(" ClaudeLens \xB7 projects ")));
+  oe(import_picocolors3.default.bgCyan(import_picocolors3.default.black(" ClaudeLens \xB7 projects ")));
   const cfg = await loadConfig();
   if (!cfg) {
     ue("Not set up yet \u2014 run `claudelens setup` first.");
     return;
   }
-  const projects = await discover();
-  if (!projects.length) {
-    ue(`No Claude Code projects found in ${PROJECTS_DIR}.`);
-    return;
-  }
-  const tracked = await ae({
-    message: "Which projects should ClaudeLens track?  (nothing is tracked by default)",
-    options: projects.map((pr) => ({
-      value: pr.cwd,
-      label: pr.label,
-      hint: `${pr.sessions} session${pr.sessions === 1 ? "" : "s"}`
-    })),
-    initialValues: projects.filter((pr) => isTracked(pr.cwd, cfg.trackProjects)).map((pr) => pr.cwd),
-    required: false
-  });
-  if (lD(tracked)) return ue("Cancelled \u2014 nothing changed.");
-  const picked = tracked;
-  const discoveredCwds = new Set(projects.map((pr) => resolve3(pr.cwd)));
-  const keptUndiscovered = cfg.trackProjects.filter((d3) => !discoveredCwds.has(resolve3(d3)));
-  cfg.trackProjects = [...picked, ...keptUndiscovered];
+  const ok = await reviewProjects(cfg);
+  if (!ok) return ue("Cancelled \u2014 nothing changed.");
   await saveConfig(cfg);
-  le(`${import_picocolors5.default.green("Tracking")}  ${cfg.trackProjects.length} project(s)`, "Saved");
-  $e(import_picocolors5.default.dim("Newly tracked projects sync on their next turn; untracked ones stop immediately."));
+  const excluded = cfg.ignoreProjects.length;
+  le(
+    excluded ? `${import_picocolors3.default.yellow("Excluded")}  ${excluded} project(s) \u2014 everything else is tracked` : import_picocolors3.default.green("Tracking every project"),
+    "Saved"
+  );
+  $e(import_picocolors3.default.dim("Newly tracked projects sync on their next turn; excluded ones stop immediately."));
 }
-var import_picocolors5, PROJECTS_DIR;
+var import_picocolors3, PROJECTS_DIR;
 var init_projects = __esm({
   "src/projects.ts"() {
     "use strict";
     init_dist2();
-    import_picocolors5 = __toESM(require_picocolors(), 1);
+    import_picocolors3 = __toESM(require_picocolors(), 1);
     init_config();
-    PROJECTS_DIR = join2(homedir3(), ".claude", "projects");
+    PROJECTS_DIR = join2(homedir2(), ".claude", "projects");
   }
 });
 
-// src/status.ts
-var status_exports = {};
-__export(status_exports, {
-  runStatus: () => runStatus
+// src/setup.ts
+var setup_exports = {};
+__export(setup_exports, {
+  runSetup: () => runSetup
 });
-async function runStatus() {
-  const cfg = await loadConfig();
-  if (!cfg) {
-    console.log(import_picocolors6.default.yellow("ClaudeLens is not set up on this machine."));
-    console.log(`Run ${import_picocolors6.default.cyan("claudelens setup")} to configure it.`);
-    return;
+import { userInfo } from "node:os";
+async function runSetup() {
+  oe(import_picocolors4.default.bgCyan(import_picocolors4.default.black(" ClaudeLens setup ")));
+  const existing = await loadConfig();
+  const name = await te({
+    message: "Your name (shown as the author on the dashboard)",
+    initialValue: existing?.name ?? userInfo().username,
+    validate: (v2) => v2.trim() ? void 0 : "required"
+  });
+  if (lD(name)) return ue("Cancelled.");
+  const server = await te({
+    message: "ClaudeLens server URL",
+    initialValue: existing?.server ?? "http://localhost:4000",
+    validate: (v2) => v2.trim() ? void 0 : "required"
+  });
+  if (lD(server)) return ue("Cancelled.");
+  const token = await re({
+    message: "Ingest token (blank = keep current / open server)"
+  });
+  if (lD(token)) return ue("Cancelled.");
+  const tokenValue = token.trim() || existing?.token || void 0;
+  const cfg = existing ? { ...existing, name: name.trim(), server: server.trim(), token: tokenValue } : newConfig(name.trim(), { server: server.trim(), token: tokenValue });
+  const upgrading = Boolean(existing?.trackProjects && !existing.trackingReviewed);
+  if (upgrading) {
+    f2.info(
+      import_picocolors4.default.dim("Upgrading from the old opt-in setup \u2014 ") + "tracking now defaults to on. Nothing has synced yet; review below."
+    );
   }
-  console.log(import_picocolors6.default.bold("\n  ClaudeLens status\n"));
-  console.log(`  ${import_picocolors6.default.dim("Name")}     ${cfg.name}`);
-  console.log(`  ${import_picocolors6.default.dim("Server")}   ${cfg.server}`);
-  console.log(`  ${import_picocolors6.default.dim("Token")}    ${cfg.token ? import_picocolors6.default.green("set") : import_picocolors6.default.dim("(none)")}`);
-  console.log(`  ${import_picocolors6.default.dim("Redact")}   ${cfg.redact ? "on" : "off"}`);
-  console.log(`  ${import_picocolors6.default.dim("Config")}   ${CONFIG_PATH}`);
-  try {
-    const r2 = await fetch(`${cfg.server}/api/health`, { signal: AbortSignal.timeout(3e3) });
-    console.log(`  ${import_picocolors6.default.dim("Health")}   ${r2.ok ? import_picocolors6.default.green("reachable") : import_picocolors6.default.red(`HTTP ${r2.status}`)}`);
-  } catch {
-    console.log(`  ${import_picocolors6.default.dim("Health")}   ${import_picocolors6.default.red("unreachable")}`);
-  }
-  const projects = await discover();
-  const tracked = projects.filter((p) => isTracked(p.cwd, cfg.trackProjects));
-  console.log(
-    import_picocolors6.default.bold(
-      `
-  Projects  ${import_picocolors6.default.green(`${tracked.length} tracked`)} \xB7 ${import_picocolors6.default.dim(`${projects.length - tracked.length} not tracked`)}
-`
-    )
+  f2.step(import_picocolors4.default.bold("Tracking is on by default.") + import_picocolors4.default.dim(" Review what syncs \u2014 untick to exclude."));
+  const reviewed = await reviewProjects(cfg);
+  if (!reviewed) return ue("Cancelled \u2014 nothing changed.");
+  await saveConfig(cfg);
+  le(
+    [
+      `${import_picocolors4.default.bold("Name")}      ${cfg.name}`,
+      `${import_picocolors4.default.bold("Server")}    ${cfg.server}`,
+      `${import_picocolors4.default.bold("Token")}     ${cfg.token ? import_picocolors4.default.green("set") : import_picocolors4.default.dim("(none)")}`,
+      `${import_picocolors4.default.bold("Tracking")}  ${trackingSummary(cfg)}`,
+      `${import_picocolors4.default.bold("Config")}    ${CONFIG_PATH}`
+    ].join("\n"),
+    "Saved"
   );
-  for (const p of projects) {
-    const on = isTracked(p.cwd, cfg.trackProjects);
-    const mark = on ? import_picocolors6.default.green("\u2713") : import_picocolors6.default.dim("\xB7");
-    const label = on ? p.label : import_picocolors6.default.dim(p.label);
-    console.log(`  ${mark} ${label} ${import_picocolors6.default.dim(`(${p.sessions})`)}`);
-  }
-  console.log(
-    `
-  Track the current project with ${import_picocolors6.default.cyan("claudelens track")}, or edit with ${import_picocolors6.default.cyan("claudelens projects")}
-`
+  $e(
+    import_picocolors4.default.green("Setup complete. ") + import_picocolors4.default.dim("Tracked projects sync automatically after each turn.\n") + import_picocolors4.default.dim("Exclude one anytime with ") + import_picocolors4.default.cyan("claudelens untrack") + import_picocolors4.default.dim(", or pause everything with ") + import_picocolors4.default.cyan("claudelens pause") + import_picocolors4.default.dim(".")
   );
 }
-var import_picocolors6;
-var init_status = __esm({
-  "src/status.ts"() {
+function trackingSummary(cfg) {
+  const n = cfg.ignoreProjects.length;
+  if (cfg.paused) return import_picocolors4.default.yellow("paused (nothing syncs)");
+  return n === 0 ? import_picocolors4.default.green("every project") : `${import_picocolors4.default.green("on")} \xB7 ${n} project(s) excluded`;
+}
+var import_picocolors4;
+var init_setup = __esm({
+  "src/setup.ts"() {
     "use strict";
-    import_picocolors6 = __toESM(require_picocolors(), 1);
+    init_dist2();
+    import_picocolors4 = __toESM(require_picocolors(), 1);
     init_config();
     init_projects();
   }
 });
 
-// src/update.ts
-var update_exports = {};
-__export(update_exports, {
-  runUpdate: () => runUpdate
+// src/track.ts
+var track_exports = {};
+__export(track_exports, {
+  runTrack: () => runTrack,
+  runUntrack: () => runUntrack
 });
-import { spawnSync } from "node:child_process";
-import { existsSync } from "node:fs";
-import { dirname, resolve as resolve4, join as join3 } from "node:path";
-import { fileURLToPath } from "node:url";
-function run(cmd2, args, cwd) {
-  const r2 = spawnSync(cmd2, args, { cwd, stdio: "inherit" });
-  return r2.status === 0;
+import { resolve as resolve3, join as join3 } from "node:path";
+import { homedir as homedir3 } from "node:os";
+import { writeFile as writeFile2, unlink } from "node:fs/promises";
+function parseArgs() {
+  const args = process.argv.slice(3);
+  const shared = args.includes("--shared") || args.includes("--repo");
+  const positional = args.find((a3) => !a3.startsWith("-"));
+  return { dir: resolve3(positional ?? process.cwd()), shared };
 }
-async function runUpdate() {
-  const bundle = fileURLToPath(import.meta.url);
-  const repo = resolve4(dirname(bundle), "..", "..");
-  if (!existsSync(join3(repo, ".git"))) {
-    console.error(import_picocolors7.default.red(`Can't find the ClaudeLens git clone at ${repo}.`));
-    console.error(
-      "Update from your clone (where you ran `claudelens install`), or reinstall the plugin in Claude Code."
+function reviewHint(reviewed) {
+  if (!reviewed) {
+    console.log(
+      import_picocolors5.default.dim("  Finish switching tracking on with ") + import_picocolors5.default.cyan("claudelens projects") + import_picocolors5.default.dim(".")
     );
-    process.exit(1);
   }
-  console.log(import_picocolors7.default.dim(`Updating ClaudeLens in ${repo}
-`));
-  if (!run("git", ["-C", repo, "pull", "--ff-only"], repo)) {
-    console.error(import_picocolors7.default.red("\ngit pull failed \u2014 resolve it in the repo, then retry."));
-    process.exit(1);
-  }
-  console.log(import_picocolors7.default.dim("\nRebuilding bundle\u2026"));
-  const built = run("pnpm", ["--filter", "@claudelens/cli", "build:plugin"], repo);
-  if (!built) {
-    console.log(import_picocolors7.default.yellow("(skipped rebuild \u2014 using the committed bundle from the pull)"));
-  }
-  console.log(import_picocolors7.default.green("\n\u2714 Updated."));
-  console.log(import_picocolors7.default.dim("Takes effect on the next turn / command \u2014 no plugin reinstall needed."));
 }
-var import_picocolors7;
-var init_update = __esm({
-  "src/update.ts"() {
-    "use strict";
-    import_picocolors7 = __toESM(require_picocolors(), 1);
+async function runTrack() {
+  const cfg = await loadConfig();
+  if (!cfg) {
+    console.error(import_picocolors5.default.yellow("Not set up yet \u2014 run `claudelens setup` first."));
+    process.exit(1);
   }
-});
-
-// src/install.ts
-var install_exports = {};
-__export(install_exports, {
-  runInstall: () => runInstall
-});
-import { chmod, mkdir, writeFile as writeFile2 } from "node:fs/promises";
-import { homedir as homedir4 } from "node:os";
-import { join as join4 } from "node:path";
-import { fileURLToPath as fileURLToPath2 } from "node:url";
-async function runInstall() {
-  const bundle = fileURLToPath2(import.meta.url);
-  const binDir = join4(homedir4(), ".local", "bin");
-  const wrapper = join4(binDir, "claudelens");
-  await mkdir(binDir, { recursive: true });
-  await writeFile2(wrapper, `#!/bin/sh
-exec node "${bundle}" "$@"
-`, "utf8");
-  await chmod(wrapper, 493);
-  console.log(import_picocolors8.default.green(`
-  Installed  ${wrapper}`));
-  console.log(import_picocolors8.default.dim(`  runs       node ${bundle}
-`));
-  const onPath = (process.env.PATH ?? "").split(":").includes(binDir);
-  if (onPath) {
-    console.log(`  Try it:  ${import_picocolors8.default.cyan("claudelens setup")}
-`);
+  const { dir, shared } = parseArgs();
+  const wasExcluded = cfg.ignoreProjects.some((p) => resolve3(p) === dir);
+  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve3(p) !== dir);
+  await saveConfig(cfg);
+  if (shared) {
+    try {
+      await unlink(join3(dir, REPO_MARKER));
+      console.log(import_picocolors5.default.dim(`  Removed committed ${REPO_MARKER} \u2014 repo tracked for the team again.`));
+    } catch {
+    }
+  }
+  if (wasExcluded || shared) {
+    console.log(import_picocolors5.default.green(`
+  \u2714 Tracking  ${pretty(dir)}`));
+    console.log(import_picocolors5.default.dim("  Sessions here (and in subfolders) sync from the next turn on."));
   } else {
-    console.log(import_picocolors8.default.yellow(`  \u26A0  ${binDir} is not on your PATH. Add it:`));
-    console.log(`     ${import_picocolors8.default.cyan(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)}
-`);
+    console.log(import_picocolors5.default.dim(`Already tracking ${pretty(dir)} (tracking is on by default).`));
   }
-  console.log(
-    `  ${import_picocolors8.default.dim("To update later:")} ${import_picocolors8.default.cyan("claudelens update")} ${import_picocolors8.default.dim("(pulls + rebuilds \u2014 no reinstall)")}
-`
-  );
+  reviewHint(cfg.trackingReviewed);
+  console.log("");
 }
-var import_picocolors8;
-var init_install = __esm({
-  "src/install.ts"() {
+async function runUntrack() {
+  const cfg = await loadConfig();
+  if (!cfg) {
+    console.error(import_picocolors5.default.yellow("Not set up yet \u2014 run `claudelens setup` first."));
+    process.exit(1);
+  }
+  const { dir, shared } = parseArgs();
+  if (!isExcludedLocally(dir, cfg)) {
+    cfg.ignoreProjects.push(dir);
+    await saveConfig(cfg);
+  }
+  if (shared) {
+    await writeFile2(
+      join3(dir, REPO_MARKER),
+      "# ClaudeLens: this repo is never tracked, for anyone. Commit this file.\nignore: true\n",
+      "utf8"
+    );
+    console.log(import_picocolors5.default.yellow(`
+  \u2714 Wrote ${REPO_MARKER} \u2014 commit it to exclude this repo team-wide.`));
+  } else {
+    console.log(import_picocolors5.default.yellow(`
+  \u2714 Stopped tracking  ${pretty(dir)}`));
+    console.log(import_picocolors5.default.dim("  Sessions here stop syncing immediately (this machine only)."));
+  }
+  console.log("");
+}
+var import_picocolors5, pretty;
+var init_track = __esm({
+  "src/track.ts"() {
     "use strict";
-    import_picocolors8 = __toESM(require_picocolors(), 1);
+    import_picocolors5 = __toESM(require_picocolors(), 1);
+    init_config();
+    pretty = (d3) => d3.replace(homedir3(), "~");
   }
 });
 
@@ -1490,36 +1498,321 @@ var init_src = __esm({
   }
 });
 
+// src/sessions.ts
+var sessions_exports = {};
+__export(sessions_exports, {
+  runSessions: () => runSessions
+});
+import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
+import { join as join4, resolve as resolve4 } from "node:path";
+async function sessionsUnder(root) {
+  let dirs;
+  try {
+    dirs = await readdir2(PROJECTS_DIR2);
+  } catch {
+    return [];
+  }
+  const byId = /* @__PURE__ */ new Map();
+  for (const d3 of dirs) {
+    const full = join4(PROJECTS_DIR2, d3);
+    let files;
+    try {
+      files = (await readdir2(full)).filter((f3) => f3.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    for (const f3 of files) {
+      const path = join4(full, f3);
+      try {
+        const raw = await readFile3(path, "utf8");
+        const session = parseTranscript(raw);
+        if (!session.sessionId || session.sessionId === "unknown") continue;
+        if (session.stats.turns < 1) continue;
+        const cwd = session.cwd ?? root;
+        if (!isUnderAny(cwd, [root])) continue;
+        const st = await stat(path);
+        const first = session.stats.firstUserPrompt?.replace(/\s+/g, " ").trim() ?? "";
+        const label = (session.title || first || session.sessionId).slice(0, 72);
+        const existing = byId.get(session.sessionId);
+        if (!existing || st.mtimeMs > existing.mtime) {
+          byId.set(session.sessionId, { id: session.sessionId, label, mtime: st.mtimeMs, turns: session.stats.turns });
+        }
+      } catch {
+      }
+    }
+  }
+  return [...byId.values()].sort((a3, b3) => b3.mtime - a3.mtime);
+}
+async function runSessions() {
+  oe(import_picocolors6.default.bgCyan(import_picocolors6.default.black(" ClaudeLens \xB7 sessions ")));
+  const cfg = await loadConfig();
+  if (!cfg) {
+    ue("Not set up yet \u2014 run `claudelens setup` first.");
+    return;
+  }
+  const root = resolve4(process.argv[3] ?? process.cwd());
+  const sessions = await sessionsUnder(root);
+  if (!sessions.length) {
+    ue(`No Claude Code sessions found under ${root.replace(homedir4(), "~")}.`);
+    return;
+  }
+  const ignored = new Set(cfg.ignoreSessions);
+  const tracked = await ae({
+    message: "Which sessions in this project should sync?  (untick to keep one off the dashboard)",
+    options: sessions.map((s) => ({
+      value: s.id,
+      label: s.label,
+      hint: `${s.turns} turn${s.turns === 1 ? "" : "s"}`
+    })),
+    initialValues: sessions.filter((s) => !ignored.has(s.id)).map((s) => s.id),
+    required: false
+  });
+  if (lD(tracked)) return ue("Cancelled \u2014 nothing changed.");
+  const picked = new Set(tracked);
+  const shownIds = new Set(sessions.map((s) => s.id));
+  const untickedNow = sessions.filter((s) => !picked.has(s.id)).map((s) => s.id);
+  const keptElsewhere = cfg.ignoreSessions.filter((id) => !shownIds.has(id));
+  cfg.ignoreSessions = [.../* @__PURE__ */ new Set([...untickedNow, ...keptElsewhere])];
+  await saveConfig(cfg);
+  le(
+    untickedNow.length ? `${import_picocolors6.default.yellow("Excluded")}  ${untickedNow.length} session(s) in this project` : import_picocolors6.default.green("All sessions in this project sync"),
+    "Saved"
+  );
+  $e(import_picocolors6.default.dim("Excluded sessions are removed from future syncs; re-tick to restore."));
+}
+var import_picocolors6, PROJECTS_DIR2;
+var init_sessions = __esm({
+  "src/sessions.ts"() {
+    "use strict";
+    init_dist2();
+    import_picocolors6 = __toESM(require_picocolors(), 1);
+    init_src();
+    init_config();
+    PROJECTS_DIR2 = join4(homedir4(), ".claude", "projects");
+  }
+});
+
+// src/pause.ts
+var pause_exports = {};
+__export(pause_exports, {
+  runPause: () => runPause,
+  runResume: () => runResume
+});
+async function setPaused(paused) {
+  const cfg = await loadConfig();
+  if (!cfg) {
+    console.error(import_picocolors7.default.yellow("Not set up yet \u2014 run `claudelens setup` first."));
+    process.exit(1);
+  }
+  if (cfg.paused === paused) {
+    console.log(import_picocolors7.default.dim(paused ? "Already paused." : "Not paused."));
+    return;
+  }
+  cfg.paused = paused;
+  await saveConfig(cfg);
+  if (paused) {
+    console.log(import_picocolors7.default.yellow("\n  \u23F8  Paused \u2014 nothing syncs until you run ") + import_picocolors7.default.cyan("claudelens resume") + "\n");
+  } else {
+    console.log(import_picocolors7.default.green("\n  \u25B6  Resumed \u2014 tracked projects sync again from the next turn.\n"));
+  }
+}
+var import_picocolors7, runPause, runResume;
+var init_pause = __esm({
+  "src/pause.ts"() {
+    "use strict";
+    import_picocolors7 = __toESM(require_picocolors(), 1);
+    init_config();
+    runPause = () => setPaused(true);
+    runResume = () => setPaused(false);
+  }
+});
+
+// src/status.ts
+var status_exports = {};
+__export(status_exports, {
+  runStatus: () => runStatus
+});
+async function runStatus() {
+  const cfg = await loadConfig();
+  if (!cfg) {
+    console.log(import_picocolors8.default.yellow("ClaudeLens is not set up on this machine."));
+    console.log(`Run ${import_picocolors8.default.cyan("claudelens setup")} to configure it.`);
+    return;
+  }
+  console.log(import_picocolors8.default.bold("\n  ClaudeLens status\n"));
+  console.log(`  ${import_picocolors8.default.dim("Name")}     ${cfg.name}`);
+  console.log(`  ${import_picocolors8.default.dim("Server")}   ${cfg.server}`);
+  console.log(`  ${import_picocolors8.default.dim("Token")}    ${cfg.token ? import_picocolors8.default.green("set") : import_picocolors8.default.dim("(none)")}`);
+  console.log(`  ${import_picocolors8.default.dim("Redact")}   ${cfg.redact ? "on" : "off"}`);
+  console.log(
+    `  ${import_picocolors8.default.dim("Sync")}     ${cfg.paused ? import_picocolors8.default.yellow("paused \u2014 nothing syncs") : cfg.trackingReviewed ? import_picocolors8.default.green("on (tracking by default)") : import_picocolors8.default.yellow("not reviewed yet \u2014 run `claudelens projects`")}`
+  );
+  console.log(`  ${import_picocolors8.default.dim("Config")}   ${CONFIG_PATH}`);
+  try {
+    const r2 = await fetch(`${cfg.server}/api/health`, { signal: AbortSignal.timeout(3e3) });
+    console.log(`  ${import_picocolors8.default.dim("Health")}   ${r2.ok ? import_picocolors8.default.green("reachable") : import_picocolors8.default.red(`HTTP ${r2.status}`)}`);
+  } catch {
+    console.log(`  ${import_picocolors8.default.dim("Health")}   ${import_picocolors8.default.red("unreachable")}`);
+  }
+  const projects = await discover();
+  const tracked = projects.filter((pr) => !pr.repoExcluded && isTracked(pr.cwd, cfg));
+  console.log(
+    import_picocolors8.default.bold(
+      `
+  Projects  ${import_picocolors8.default.green(`${tracked.length} tracked`)} \xB7 ${import_picocolors8.default.dim(
+        `${projects.length - tracked.length} excluded`
+      )}
+`
+    )
+  );
+  for (const pr of projects) {
+    const repoOff = pr.repoExcluded;
+    const on = !repoOff && isTracked(pr.cwd, cfg);
+    const mark = on ? import_picocolors8.default.green("\u2713") : import_picocolors8.default.dim("\xB7");
+    const label = on ? pr.label : import_picocolors8.default.dim(pr.label);
+    const tag = repoOff ? import_picocolors8.default.dim("  (repo .claudelens)") : "";
+    console.log(`  ${mark} ${label} ${import_picocolors8.default.dim(`(${pr.sessions})`)}${tag}`);
+  }
+  if (cfg.ignoreSessions.length) {
+    console.log(import_picocolors8.default.dim(`
+  ${cfg.ignoreSessions.length} individual session(s) excluded.`));
+  }
+  console.log(
+    `
+  Exclude the current project with ${import_picocolors8.default.cyan("claudelens untrack")}, or review all with ${import_picocolors8.default.cyan("claudelens projects")}
+`
+  );
+}
+var import_picocolors8;
+var init_status = __esm({
+  "src/status.ts"() {
+    "use strict";
+    import_picocolors8 = __toESM(require_picocolors(), 1);
+    init_config();
+    init_projects();
+  }
+});
+
+// src/update.ts
+var update_exports = {};
+__export(update_exports, {
+  runUpdate: () => runUpdate
+});
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname as dirname2, resolve as resolve5, join as join5 } from "node:path";
+import { fileURLToPath } from "node:url";
+function run(cmd2, args, cwd) {
+  const r2 = spawnSync(cmd2, args, { cwd, stdio: "inherit" });
+  return r2.status === 0;
+}
+async function runUpdate() {
+  const bundle = fileURLToPath(import.meta.url);
+  const repo = resolve5(dirname2(bundle), "..", "..");
+  if (!existsSync(join5(repo, ".git"))) {
+    console.error(import_picocolors9.default.red(`Can't find the ClaudeLens git clone at ${repo}.`));
+    console.error(
+      "Update from your clone (where you ran `claudelens install`), or reinstall the plugin in Claude Code."
+    );
+    process.exit(1);
+  }
+  console.log(import_picocolors9.default.dim(`Updating ClaudeLens in ${repo}
+`));
+  if (!run("git", ["-C", repo, "pull", "--ff-only"], repo)) {
+    console.error(import_picocolors9.default.red("\ngit pull failed \u2014 resolve it in the repo, then retry."));
+    process.exit(1);
+  }
+  console.log(import_picocolors9.default.dim("\nRebuilding bundle\u2026"));
+  const built = run("pnpm", ["--filter", "@claudelens/cli", "build:plugin"], repo);
+  if (!built) {
+    console.log(import_picocolors9.default.yellow("(skipped rebuild \u2014 using the committed bundle from the pull)"));
+  }
+  console.log(import_picocolors9.default.green("\n\u2714 Updated."));
+  console.log(import_picocolors9.default.dim("Takes effect on the next turn / command \u2014 no plugin reinstall needed."));
+}
+var import_picocolors9;
+var init_update = __esm({
+  "src/update.ts"() {
+    "use strict";
+    import_picocolors9 = __toESM(require_picocolors(), 1);
+  }
+});
+
+// src/install.ts
+var install_exports = {};
+__export(install_exports, {
+  runInstall: () => runInstall
+});
+import { chmod, mkdir, writeFile as writeFile3 } from "node:fs/promises";
+import { homedir as homedir5 } from "node:os";
+import { join as join6 } from "node:path";
+import { fileURLToPath as fileURLToPath2 } from "node:url";
+async function runInstall() {
+  const bundle = fileURLToPath2(import.meta.url);
+  const binDir = join6(homedir5(), ".local", "bin");
+  const wrapper = join6(binDir, "claudelens");
+  await mkdir(binDir, { recursive: true });
+  await writeFile3(wrapper, `#!/bin/sh
+exec node "${bundle}" "$@"
+`, "utf8");
+  await chmod(wrapper, 493);
+  console.log(import_picocolors10.default.green(`
+  Installed  ${wrapper}`));
+  console.log(import_picocolors10.default.dim(`  runs       node ${bundle}
+`));
+  const onPath = (process.env.PATH ?? "").split(":").includes(binDir);
+  if (onPath) {
+    console.log(`  Try it:  ${import_picocolors10.default.cyan("claudelens setup")}
+`);
+  } else {
+    console.log(import_picocolors10.default.yellow(`  \u26A0  ${binDir} is not on your PATH. Add it:`));
+    console.log(`     ${import_picocolors10.default.cyan(`echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.zshrc && source ~/.zshrc`)}
+`);
+  }
+  console.log(
+    `  ${import_picocolors10.default.dim("To update later:")} ${import_picocolors10.default.cyan("claudelens update")} ${import_picocolors10.default.dim("(pulls + rebuilds \u2014 no reinstall)")}
+`
+  );
+}
+var import_picocolors10;
+var init_install = __esm({
+  "src/install.ts"() {
+    "use strict";
+    import_picocolors10 = __toESM(require_picocolors(), 1);
+  }
+});
+
 // src/index.ts
 var index_exports = {};
 __export(index_exports, {
   runPublish: () => runPublish
 });
-import { readdir as readdir2, readFile as readFile3, stat } from "node:fs/promises";
-import { homedir as homedir5, userInfo as userInfo2 } from "node:os";
-import { join as join5 } from "node:path";
+import { readdir as readdir3, readFile as readFile4, stat as stat2 } from "node:fs/promises";
+import { homedir as homedir6, userInfo as userInfo2 } from "node:os";
+import { join as join7 } from "node:path";
 async function collectSessions() {
   let projectDirs;
   try {
-    projectDirs = await readdir2(PROJECTS_DIR2);
+    projectDirs = await readdir3(PROJECTS_DIR3);
   } catch {
     return [];
   }
   const out = [];
   for (const dir of projectDirs) {
-    const full = join5(PROJECTS_DIR2, dir);
+    const full = join7(PROJECTS_DIR3, dir);
     let files;
     try {
-      files = await readdir2(full);
+      files = await readdir3(full);
     } catch {
       continue;
     }
-    for (const f2 of files) {
-      if (!f2.endsWith(".jsonl")) continue;
-      const path = join5(full, f2);
+    for (const f3 of files) {
+      if (!f3.endsWith(".jsonl")) continue;
+      const path = join7(full, f3);
       try {
-        const st = await stat(path);
-        const raw = await readFile3(path, "utf8");
+        const st = await stat2(path);
+        const raw = await readFile4(path, "utf8");
         const session = parseTranscript(raw);
         if (session.stats.turns < 2) continue;
         out.push({ file: path, mtime: st.mtimeMs, session });
@@ -1534,14 +1827,14 @@ function fmtCost(n) {
 }
 async function runPublish() {
   console.clear();
-  oe(import_picocolors9.default.bgCyan(import_picocolors9.default.black(" ClaudeLens ")) + import_picocolors9.default.dim(" share a session so your team can learn"));
+  oe(import_picocolors11.default.bgCyan(import_picocolors11.default.black(" ClaudeLens ")) + import_picocolors11.default.dim(" share a session so your team can learn"));
   const candidates = await collectSessions();
   if (!candidates.length) {
-    ue(`No Claude Code sessions found in ${PROJECTS_DIR2}`);
+    ue(`No Claude Code sessions found in ${PROJECTS_DIR3}`);
     process.exit(1);
   }
   const picked = await ie({
-    message: `Pick a session to share  ${import_picocolors9.default.dim("(server: " + SERVER + ")")}`,
+    message: `Pick a session to share  ${import_picocolors11.default.dim("(server: " + SERVER + ")")}`,
     options: candidates.slice(0, 40).map((c2, i) => {
       const s2 = c2.session;
       const when = new Date(c2.mtime).toLocaleString();
@@ -1565,17 +1858,17 @@ async function runPublish() {
   const hitEntries = Object.entries(hits);
   le(
     [
-      `${import_picocolors9.default.bold("Title")}    ${s.title}`,
-      `${import_picocolors9.default.bold("Project")}  ${s.project ?? "\u2014"}  (branch: ${s.gitBranch ?? "\u2014"})`,
-      `${import_picocolors9.default.bold("Turns")}    ${s.stats.turns}  \xB7  models: ${s.stats.models.join(", ") || "\u2014"}`,
-      `${import_picocolors9.default.bold("Tokens")}   ${s.stats.totalTokens.toLocaleString()}  (~${fmtCost(
+      `${import_picocolors11.default.bold("Title")}    ${s.title}`,
+      `${import_picocolors11.default.bold("Project")}  ${s.project ?? "\u2014"}  (branch: ${s.gitBranch ?? "\u2014"})`,
+      `${import_picocolors11.default.bold("Turns")}    ${s.stats.turns}  \xB7  models: ${s.stats.models.join(", ") || "\u2014"}`,
+      `${import_picocolors11.default.bold("Tokens")}   ${s.stats.totalTokens.toLocaleString()}  (~${fmtCost(
         s.stats.estimatedCostUsd
       )})`,
-      `${import_picocolors9.default.bold("Skills")}   ${s.stats.skills.join(", ") || "\u2014"}`,
-      `${import_picocolors9.default.bold("Agents")}   ${s.stats.subagents.join(", ") || "\u2014"}`,
-      hitEntries.length ? import_picocolors9.default.yellow(
+      `${import_picocolors11.default.bold("Skills")}   ${s.stats.skills.join(", ") || "\u2014"}`,
+      `${import_picocolors11.default.bold("Agents")}   ${s.stats.subagents.join(", ") || "\u2014"}`,
+      hitEntries.length ? import_picocolors11.default.yellow(
         `Redacted secrets: ${hitEntries.map(([k2, v2]) => `${k2}\xD7${v2}`).join(", ")}`
-      ) : import_picocolors9.default.green("No secrets detected by the redactor.")
+      ) : import_picocolors11.default.green("No secrets detected by the redactor.")
     ].join("\n"),
     "Preview"
   );
@@ -1620,22 +1913,22 @@ async function runPublish() {
     if (!resp.ok) throw new Error(`server responded ${resp.status}: ${await resp.text()}`);
     const data = await resp.json();
     spin.stop("Uploaded.");
-    $e(import_picocolors9.default.green(`\u2714 Shared! ${SERVER.replace(/:\d+$/, ":5173")}/session/${data.id}`));
+    $e(import_picocolors11.default.green(`\u2714 Shared! ${SERVER.replace(/:\d+$/, ":5173")}/session/${data.id}`));
   } catch (err) {
     spin.stop("Upload failed.");
     ue(String(err));
     process.exit(1);
   }
 }
-var import_picocolors9, PROJECTS_DIR2, SERVER, TOKEN;
+var import_picocolors11, PROJECTS_DIR3, SERVER, TOKEN;
 var init_index = __esm({
   "src/index.ts"() {
     "use strict";
     init_dist2();
-    import_picocolors9 = __toESM(require_picocolors(), 1);
+    import_picocolors11 = __toESM(require_picocolors(), 1);
     init_src();
     init_config();
-    PROJECTS_DIR2 = join5(homedir5(), ".claude", "projects");
+    PROJECTS_DIR3 = join7(homedir6(), ".claude", "projects");
     SERVER = process.env.CLAUDELENS_SERVER ?? "http://localhost:4000";
     TOKEN = process.env.CLAUDELENS_TOKEN ?? "";
   }
@@ -1646,19 +1939,19 @@ var sync_exports = {};
 __export(sync_exports, {
   runSync: () => runSync
 });
-import { readFile as readFile4 } from "node:fs/promises";
+import { readFile as readFile5 } from "node:fs/promises";
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
 }
 async function readSettledSession(path) {
-  let session = parseTranscript(await readFile4(path, "utf8"));
+  let session = parseTranscript(await readFile5(path, "utf8"));
   for (let i = 0; i < 10; i++) {
     const last = session.turns[session.turns.length - 1];
     if (last && last.role === "assistant") break;
     await sleep(250);
-    session = parseTranscript(await readFile4(path, "utf8"));
+    session = parseTranscript(await readFile5(path, "utf8"));
   }
   return session;
 }
@@ -1672,11 +1965,12 @@ async function runSync() {
   } catch {
     return;
   }
-  const { transcript_path, cwd } = hook;
+  const { transcript_path, cwd, session_id } = hook;
   if (!transcript_path || !cwd) return;
-  if (!shouldTrack(cwd, cfg)) return;
+  if (!await shouldSync(cwd, session_id, cfg)) return;
   const session = await readSettledSession(transcript_path);
   if (!session.sessionId || session.stats.turns < 1) return;
+  if (cfg.ignoreSessions.includes(session.sessionId)) return;
   if (cfg.redact) {
     session.turns = redactDeep(session.turns).value;
     if (session.stats.firstUserPrompt) {
@@ -1710,11 +2004,18 @@ function printHelp() {
 
 Usage: claudelens <command>
 
-  track [dir]    Start tracking a project (defaults to the current directory)
-  untrack [dir]  Stop tracking a project
-  projects       Edit tracked projects (interactive checklist)
-  status         Show current config and tracked projects
-  setup          Configure your name, server URL and token
+Tracking is ON by default \u2014 every project syncs unless you opt it out.
+
+  untrack [dir]  Stop tracking a project  (add --shared to write a committed
+                 .claudelens that excludes the repo for the whole team)
+  track [dir]    Resume tracking a project you'd excluded  (--shared removes the
+                 committed .claudelens)
+  projects       Review tracked projects (interactive checklist \u2014 untick to exclude)
+  sessions [dir] Exclude individual sessions in a project (interactive checklist)
+  pause          Kill-switch: stop ALL syncing without losing your exclusions
+  resume         Turn syncing back on
+  status         Show current config and what's tracked vs excluded
+  setup          Configure your name, server URL and token, then review tracking
   update         Pull the latest code + rebuild \u2014 no plugin reinstall
   install        Add the 'claudelens' command to your PATH (~/.local/bin)
   publish        Manually pick and publish one past session
@@ -1732,6 +2033,12 @@ async function main() {
       return (await Promise.resolve().then(() => (init_track(), track_exports))).runUntrack();
     case "projects":
       return (await Promise.resolve().then(() => (init_projects(), projects_exports))).runProjects();
+    case "sessions":
+      return (await Promise.resolve().then(() => (init_sessions(), sessions_exports))).runSessions();
+    case "pause":
+      return (await Promise.resolve().then(() => (init_pause(), pause_exports))).runPause();
+    case "resume":
+      return (await Promise.resolve().then(() => (init_pause(), pause_exports))).runResume();
     case "status":
       return (await Promise.resolve().then(() => (init_status(), status_exports))).runStatus();
     case "update":

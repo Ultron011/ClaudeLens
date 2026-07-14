@@ -6,7 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import { parseTranscript, redactDeep } from '@claudelens/shared';
 import type { IngestPayload, ParsedSession } from '@claudelens/shared';
-import { loadConfig, shouldTrack } from './config.js';
+import { loadConfig, shouldSync } from './config.js';
 
 interface HookInput {
   session_id?: string;
@@ -53,13 +53,16 @@ export async function runSync(): Promise<void> {
   } catch {
     return;
   }
-  const { transcript_path, cwd } = hook;
+  const { transcript_path, cwd, session_id } = hook;
   if (!transcript_path || !cwd) return;
 
-  if (!shouldTrack(cwd, cfg)) return; // project not opted in — nothing to sync
+  // Tracking is on by default; sync unless something opted this out.
+  if (!(await shouldSync(cwd, session_id, cfg))) return;
 
   const session = await readSettledSession(transcript_path);
   if (!session.sessionId || session.stats.turns < 1) return;
+  // The transcript's own id is authoritative — re-check per-session opt-out.
+  if (cfg.ignoreSessions.includes(session.sessionId)) return;
 
   if (cfg.redact) {
     session.turns = redactDeep(session.turns).value;

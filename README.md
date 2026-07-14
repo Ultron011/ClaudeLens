@@ -2,10 +2,11 @@
 
 **A lens into how your team works with Claude Code.**
 
-An opt-in, self-hosted gallery of shared Claude Code sessions. Engineers publish
-sessions they're proud of; everyone else browses them to learn *how* people
-prompt, which **skills** and **subagents** they use, and where the token spend
-actually turns into value — instead of just seeing a cost number on a dashboard.
+A self-hosted, auto-populated gallery of the team's Claude Code sessions.
+Sessions sync automatically (tracking is on by default; projects and sessions
+can be opted out), and everyone browses them to learn *how* people prompt, which
+**skills** and **subagents** they use, and where the token spend actually turns
+into value — instead of just seeing a cost number on a dashboard.
 
 This is deliberately the half of the problem the existing ecosystem doesn't
 cover. Cost/usage analytics is already solved by Anthropic's native Team/
@@ -17,9 +18,10 @@ session files so it stands alone.
 
 ```
  developer's machine                     your internal network
- ┌─────────────────────┐   opt-in push   ┌──────────────┐     ┌───────────┐
- │  claudelens (CLI)   │ ──────────────▶ │   server     │ ──▶ │ Postgres  │
- │  reads ~/.claude/…  │   (redacted)    │  Express API │     └───────────┘
+ ┌─────────────────────┐  auto-sync      ┌──────────────┐     ┌───────────┐
+ │  claudelens (CLI)   │  (opt-out)      │   server     │ ──▶ │ Postgres  │
+ │  Stop-hook + reads  │ ──────────────▶ │  Express API │     └───────────┘
+ │  ~/.claude/…        │   (redacted)    │              │
  └─────────────────────┘                 └──────┬───────┘
                                                  │ REST
                                           ┌──────▼───────┐
@@ -27,8 +29,11 @@ session files so it stands alone.
                                           └──────────────┘
 ```
 
-- **Nothing is uploaded automatically.** A developer runs the CLI, picks one
-  session, reviews a secret-redaction report, and confirms.
+- **Tracking is on by default, with an explicit consent gate.** During setup the
+  developer sees a review checklist of every project — all ticked — and unticks
+  the ones they don't want captured. Nothing syncs until they pass that screen,
+  and any project can be opted out later (per project, per session, whole-repo,
+  or a global pause).
 - The parser extracts turns, token usage, an **estimated cost**, and the
   **tools / skills / subagents** used from the raw JSONL.
 - The dashboard shows a searchable gallery, per-contributor and per-skill
@@ -96,10 +101,18 @@ Push it to GitHub, then each teammate runs, inside Claude Code:
 /claudelens:setup          # enter your name + the server URL + token
 ```
 
-Tracking is **opt-in**: nothing syncs until you turn it on for a project. Inside
-a project you want captured, run `claudelens track` (or the `/claudelens:track`
-skill) once — from then on its sessions sync automatically after each turn.
-Manage the list with `claudelens projects`, or stop one with `claudelens untrack`.
+`/claudelens:setup` ends with a **review checklist** — tracking is on by default,
+so it shows every project you've used Claude Code in (all ticked) and you untick
+the ones you don't want captured. **Nothing syncs until you pass that screen.**
+From then on tracked projects sync automatically after each turn. Opt out later
+however you like:
+
+- `claudelens untrack` — stop tracking the current project (this machine).
+- `claudelens untrack --shared` — write a committed `.claudelens` that excludes
+  the repo for the **whole team** (commit it).
+- `claudelens sessions` — exclude individual sessions inside a tracked project.
+- `claudelens pause` / `resume` — a global kill-switch for all syncing.
+- `claudelens projects` — re-open the review checklist anytime.
 
 > After changing `cli/` or `shared/`, run `pnpm plugin:build` and commit the
 > updated `plugin/dist/*.mjs` — that bundle is what the installed plugin runs.
@@ -120,7 +133,7 @@ Manage the list with `claudelens projects`, or stop one with `claudelens untrack
 The JSONL parsing approach follows the well-documented Claude Code session
 format also used by `ccusage`, `claude-code-log`, and `claude-code-trace`. Cost
 estimation mirrors `ccusage`'s per-model, cache-aware method. ClaudeLens's
-net-new contribution is the **central, opt-in, curated team gallery** with the
+net-new contribution is the **central, auto-populated, curated team gallery** with the
 skill/subagent learning lens.
 
 ## Status

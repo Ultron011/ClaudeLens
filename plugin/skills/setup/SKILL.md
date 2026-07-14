@@ -24,6 +24,12 @@ claudelens setup
 ```
 
 They'll enter their display name, the ClaudeLens **server URL**, and the
-**ingest token** (both provided by whoever hosts the server). After that,
-nothing syncs until they opt a project in — tell them to run `claudelens track`
-inside any project they want captured (or the `/claudelens:track` skill).
+**ingest token** (both provided by whoever hosts the server). Setup then ends
+with a **tracking review**: tracking is on by default, so it shows every project
+they've used Claude Code in — all ticked — and they untick any they don't want
+captured. **Nothing syncs until they pass this screen**, so no project they
+haven't looked at is ever uploaded.
+
+Afterwards, tracked projects sync automatically after each turn. They can
+exclude one anytime with `claudelens untrack`, exclude a repo for the whole team
+with `claudelens untrack --shared`, or stop everything with `claudelens pause`.
