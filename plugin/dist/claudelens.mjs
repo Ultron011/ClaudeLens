@@ -301,8 +301,8 @@ function resolveName(cfg) {
   if (cfg.name?.trim()) return cfg.name.trim();
   if (process.env.CLAUDELENS_NAME?.trim()) return process.env.CLAUDELENS_NAME.trim();
   try {
-    const git = execFileSync("git", ["config", "user.name"], { encoding: "utf8" }).trim();
-    if (git) return git;
+    const git2 = execFileSync("git", ["config", "user.name"], { encoding: "utf8" }).trim();
+    if (git2) return git2;
   } catch {
   }
   return userInfo().username;
@@ -681,48 +681,70 @@ var update_exports = {};
 __export(update_exports, {
   runUpdate: () => runUpdate
 });
-import { spawnSync } from "node:child_process";
+import { readFile as readFile4, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
-import { dirname as dirname2, resolve as resolve4, join as join3 } from "node:path";
-import { fileURLToPath } from "node:url";
-function run(cmd, args, cwd) {
-  const r = spawnSync(cmd, args, { cwd, stdio: "inherit" });
-  return r.status === 0;
+import { spawnSync } from "node:child_process";
+import { homedir as homedir4 } from "node:os";
+import { join as join3, resolve as resolve4 } from "node:path";
+function git(args, cwd) {
+  return spawnSync("git", args, { cwd, stdio: "inherit" }).status === 0;
 }
-function findGitRoot(start) {
-  let cur = resolve4(start);
-  for (let i = 0; i < 40; i++) {
-    if (existsSync(join3(cur, ".git"))) return cur;
-    const parent = dirname2(cur);
-    if (parent === cur) return void 0;
-    cur = parent;
+function runningRoot() {
+  const a = process.argv.slice(3);
+  const i = a.indexOf("--root");
+  const v = i >= 0 ? a[i + 1] : void 0;
+  if (v && !v.includes("$") && !v.includes("{")) return v;
+  return process.env.CLAUDE_PLUGIN_ROOT || void 0;
+}
+async function findMarketplace() {
+  try {
+    const raw = await readFile4(join3(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
+    const reg = JSON.parse(raw);
+    for (const entry of Object.values(reg)) {
+      const loc = entry.installLocation;
+      if (loc && existsSync(join3(loc, ".git")) && existsSync(join3(loc, "plugin", MARKER))) return loc;
+    }
+  } catch {
   }
+  const guess = join3(PLUGINS_DIR, "marketplaces", "claudelens");
+  if (existsSync(join3(guess, ".git")) && existsSync(join3(guess, "plugin", MARKER))) return guess;
   return void 0;
 }
 async function runUpdate() {
-  const bundleDir = dirname2(fileURLToPath(import.meta.url));
-  const repo = findGitRoot(bundleDir);
-  if (!repo) {
-    console.log("Couldn't find a git checkout for this plugin.");
-    console.log("Update it from Claude Code with:  /plugin  \u2192  update  (or re-add the marketplace).");
+  const mp = await findMarketplace();
+  if (!mp) {
+    console.log("Couldn't find the ClaudeLens marketplace checkout.");
+    console.log("Update via Claude Code:  /plugin  \u2192  update  (or re-add the marketplace).");
     return;
   }
-  console.log(`Updating ClaudeLens in ${repo}`);
-  if (!run("git", ["-C", repo, "pull", "--ff-only"], repo)) {
-    console.log("git pull failed \u2014 resolve it in the checkout, then retry.");
+  console.log(`Pulling latest in ${mp} \u2026`);
+  if (!git(["-C", mp, "pull", "--ff-only"], mp)) {
+    console.log("git pull failed \u2014 resolve it in that checkout, then retry.");
     return;
   }
-  if (existsSync(join3(repo, "pnpm-workspace.yaml"))) {
-    console.log("Rebuilding bundle\u2026");
-    if (!run("pnpm", ["--filter", "@claudelens/cli", "build:plugin"], repo)) {
-      console.log("(skipped rebuild \u2014 using the committed bundle from the pull)");
-    }
+  const src = join3(mp, "plugin");
+  const root = runningRoot();
+  if (!root || !existsSync(root)) {
+    console.log("\u2714 Latest fetched. Activate it with  /plugin  \u2192  update  (or restart Claude Code).");
+    return;
   }
-  console.log("\u2714 Updated. Takes effect on the next turn \u2014 no reinstall needed.");
+  if (resolve4(src) === resolve4(root)) {
+    console.log("\u2714 Updated (running directly from the marketplace checkout).");
+    return;
+  }
+  for (const part of ["dist", "skills", "hooks", ".claude-plugin"]) {
+    const from = join3(src, part);
+    if (existsSync(from)) await cp(from, join3(root, part), { recursive: true, force: true });
+  }
+  console.log("\u2714 Updated \u2014 new code runs from the next turn.");
+  console.log("(If an update adds/removes slash commands, run /plugin \u2192 update too so the menu refreshes.)");
 }
+var PLUGINS_DIR, MARKER;
 var init_update = __esm({
   "src/update.ts"() {
     "use strict";
+    PLUGINS_DIR = join3(homedir4(), ".claude", "plugins");
+    MARKER = join3("dist", "claudelens.mjs");
   }
 });
 
