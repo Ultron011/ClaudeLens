@@ -1,22 +1,12 @@
 ---
-description: Pause or resume all ClaudeLens syncing — a global kill-switch that stops every project from syncing without losing the user's exclusion lists.
+description: Pause ALL ClaudeLens syncing on this machine — a global kill-switch. Nothing syncs until /claudelens:resume.
 ---
 
-A global kill-switch for when the user is doing sensitive work and wants nothing
-synced for a while. Non-interactive — run the one they want and relay the result.
+Global kill-switch for a stretch of sensitive work. Run:
 
-**Pause everything** (stops all syncing, keeps all exclusion settings):
-
-```
-claudelens pause 2>/dev/null || node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" pause
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" pause
 ```
 
-**Resume**:
-
-```
-claudelens resume 2>/dev/null || node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" resume
-```
-
-Pausing is machine-wide and reversible; it doesn't change which projects or
-sessions are excluded. To exclude just one project instead, use `claudelens
-untrack`.
+Nothing syncs on this machine until the user runs `/claudelens:resume`. It
+doesn't change which projects/sessions are excluded. Relay the output.

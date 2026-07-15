@@ -16,8 +16,9 @@ account, so identity is by chosen display **name**, not email.
 ## Product Purpose
 
 A self-hosted, auto-populated gallery of the team's Claude Code sessions.
-Sessions sync automatically (tracking is on by default; projects/sessions can be
-opted out). The dashboard's job is to make the team's real agent usage
+Install the plugin, connect once, and sessions sync automatically (tracking is
+on by default; any session/project can be opted out with a slash-command switch
+that stops data before it's sent). The dashboard's job is to make the team's real agent usage
 **browsable by person → project → session → transcript**, so learning is a
 matter of navigating, not digging. Success = a teammate finds and reads a
 relevant session in seconds and leaves with a concrete technique.

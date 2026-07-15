@@ -1,14 +1,14 @@
 ---
-description: Show ClaudeLens status — your name, server, token, server health, and which projects are tracked vs excluded.
+description: Show ClaudeLens status — the server, your author name, server health, and whether the current project/session is tracked or excluded.
 ---
 
-Show the user their current ClaudeLens configuration. This one is read-only and
-non-interactive, so run it and relay the output:
+Read-only. Run and relay the output:
 
-```
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" status
 ```
 
-It prints the configured name, server URL, whether a token is set, whether the
-server is reachable, and the tracked/excluded status of every project. If it
-reports "not set up", tell the user to run `claudelens setup` in their terminal.
+It prints the server URL, the author name sessions are attributed to, the global
+on/paused state, whether the current directory is tracked or excluded (and why),
+any excluded projects/sessions, and server reachability. If it says "not
+connected", tell the user to run `/claudelens:connect <server-url> <token>`.

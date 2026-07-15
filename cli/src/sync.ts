@@ -6,7 +6,7 @@
 import { readFile } from 'node:fs/promises';
 import { parseTranscript, redactDeep } from '@claudelens/shared';
 import type { IngestPayload, ParsedSession } from '@claudelens/shared';
-import { loadConfig, shouldSync } from './config.js';
+import { loadConfig, shouldSync, resolveName } from './config.js';
 
 interface HookInput {
   session_id?: string;
@@ -44,7 +44,6 @@ async function readSettledSession(path: string): Promise<ParsedSession> {
 
 export async function runSync(): Promise<void> {
   const cfg = await loadConfig();
-  if (!cfg) return; // not set up — run `claudelens setup` first
 
   const raw = await readStdin();
   let hook: HookInput = {};
@@ -71,7 +70,7 @@ export async function runSync(): Promise<void> {
     }
   }
 
-  const payload: IngestPayload = { session, author: cfg.name };
+  const payload: IngestPayload = { session, author: resolveName(cfg) };
 
   await fetch(`${cfg.server}/api/sessions`, {
     method: 'POST',

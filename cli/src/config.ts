@@ -1,18 +1,21 @@
-// Per-developer ClaudeLens config, stored at ~/.claude/claudelens.json.
+// ClaudeLens config + the "should this sync?" switch.
 //
-// Tracking is ON BY DEFAULT: every project you use Claude Code in syncs after
-// each turn — UNLESS you exclude it. Exclusions are opt-out and layered:
-//   • ignoreProjects   absolute roots THIS developer excludes  (`claudelens untrack`)
-//   • ignoreSessions   individual session ids to skip          (`claudelens sessions`)
-//   • paused           a global kill-switch                    (`claudelens pause`)
-//   • a committed `.claudelens` file in a repo excludes it for the WHOLE team.
+// There is NO interactive setup and NO terminal CLI. A teammate installs the
+// plugin and runs `/claudelens:connect <server> <token>` once; from then on
+// every session in every project syncs automatically via the Stop hook —
+// UNLESS a switch says otherwise. All switches are checked BEFORE any upload,
+// so flipping one guarantees nothing for that scope ever leaves the machine:
+//   • paused           global kill-switch                      (/claudelens:pause)
+//   • ignoreProjects   projects excluded for this developer     (/claudelens:untrack-project)
+//   • ignoreSessions   individual sessions excluded             (/claudelens:untrack)
+//   • a committed `.claudelens` file           excludes a repo for the WHOLE team
+//   • DO_NOT_TRACK / CLAUDELENS_DISABLE env    honored as a global opt-out
 //
-// `trackingReviewed` guards the opt-in→opt-out switch: until the developer has
-// confirmed the review checklist once (`claudelens setup` / `projects`), nothing
-// default-syncs. So upgrading an older opt-in config NEVER silently starts
-// uploading projects the developer hasn't looked at.
+// Config lives at ~/.claude/claudelens.json (survives plugin updates). Nothing
+// syncs until `server` is set — connecting is the enablement step.
 import { readFile, writeFile } from 'node:fs/promises';
-import { homedir } from 'node:os';
+import { homedir, userInfo } from 'node:os';
+import { execFileSync } from 'node:child_process';
 import { join, resolve, sep, dirname, parse as parsePath } from 'node:path';
 
 export const CONFIG_PATH = join(homedir(), '.claude', 'claudelens.json');
@@ -21,71 +24,73 @@ export const CONFIG_PATH = join(homedir(), '.claude', 'claudelens.json');
 export const REPO_MARKER = '.claudelens';
 
 export interface ClaudeLensConfig {
-  /** Display name — this IS the contributor identity. */
-  name: string;
-  /** Ingest target. */
-  server: string;
-  /** Optional shared bearer token. */
+  /** Display name — the contributor identity. Auto-derived if unset. */
+  name?: string;
+  /** Ingest target. Until this is set, nothing syncs. */
+  server?: string;
+  /** Shared bearer token for the ingest endpoint. */
   token?: string;
-  /** Absolute project roots THIS developer has excluded from tracking. */
+  /** Projects this developer has excluded from tracking. */
   ignoreProjects: string[];
-  /** Session ids to skip even inside an otherwise-tracked project. */
+  /** Session ids to skip even inside a tracked project. */
   ignoreSessions: string[];
-  /** Global kill-switch — when true, nothing syncs regardless of the lists. */
+  /** Global kill-switch — when true, nothing syncs. */
   paused: boolean;
-  /**
-   * Set true once the developer has seen and confirmed the tracking review.
-   * Until then, default-on syncing is held back — this is what makes upgrading
-   * an old opt-in config safe (no surprise uploads before they've looked).
-   */
-  trackingReviewed: boolean;
-  /** Run secret redaction before upload. Off by default (internal-only). */
+  /** Run secret redaction before upload. */
   redact: boolean;
-  /** @deprecated legacy opt-in allowlist; migrated into the opt-out model. */
-  trackProjects?: string[];
 }
 
-const DEFAULTS: Omit<ClaudeLensConfig, 'name'> = {
-  server: process.env.CLAUDELENS_SERVER ?? 'http://localhost:4000',
-  token: process.env.CLAUDELENS_TOKEN || undefined,
+const EMPTY: ClaudeLensConfig = {
   ignoreProjects: [],
   ignoreSessions: [],
   paused: false,
-  trackingReviewed: false,
   redact: false,
 };
 
-export async function loadConfig(): Promise<ClaudeLensConfig | null> {
+export async function loadConfig(): Promise<ClaudeLensConfig> {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf8');
     const parsed = JSON.parse(raw) as Partial<ClaudeLensConfig>;
-    if (!parsed.name) return null;
     return {
       name: parsed.name,
-      server: parsed.server ?? DEFAULTS.server,
-      token: parsed.token ?? DEFAULTS.token,
+      server: parsed.server ?? process.env.CLAUDELENS_SERVER,
+      token: parsed.token ?? process.env.CLAUDELENS_TOKEN,
       ignoreProjects: parsed.ignoreProjects ?? [],
       ignoreSessions: parsed.ignoreSessions ?? [],
-      paused: parsed.paused ?? DEFAULTS.paused,
-      trackingReviewed: parsed.trackingReviewed ?? DEFAULTS.trackingReviewed,
-      redact: parsed.redact ?? DEFAULTS.redact,
-      // Preserved only so `setup` can migrate it; never written back once migrated.
-      trackProjects: parsed.trackProjects,
+      paused: parsed.paused ?? false,
+      redact: parsed.redact ?? false,
     };
   } catch {
-    return null;
+    // No config file yet — fall back to env so a centrally-provisioned machine
+    // (CLAUDELENS_SERVER/TOKEN) works without ever running connect.
+    return {
+      ...EMPTY,
+      server: process.env.CLAUDELENS_SERVER,
+      token: process.env.CLAUDELENS_TOKEN,
+    };
   }
 }
 
 export async function saveConfig(cfg: ClaudeLensConfig): Promise<void> {
-  // Drop the legacy field on save so a migrated config stays clean.
-  const { trackProjects: _legacy, ...clean } = cfg;
-  await writeFile(CONFIG_PATH, JSON.stringify(clean, null, 2) + '\n', 'utf8');
+  await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
 }
 
-/** Build a fresh config. */
-export function newConfig(name: string, overrides: Partial<ClaudeLensConfig> = {}): ClaudeLensConfig {
-  return { name, ...DEFAULTS, ...overrides };
+/** True once the plugin knows where to send — i.e. connect has run (or env is set). */
+export function isConnected(cfg: ClaudeLensConfig): boolean {
+  return Boolean(cfg.server);
+}
+
+/** The author name to attribute sessions to: explicit → env → git → OS user. */
+export function resolveName(cfg: ClaudeLensConfig): string {
+  if (cfg.name?.trim()) return cfg.name.trim();
+  if (process.env.CLAUDELENS_NAME?.trim()) return process.env.CLAUDELENS_NAME.trim();
+  try {
+    const git = execFileSync('git', ['config', 'user.name'], { encoding: 'utf8' }).trim();
+    if (git) return git;
+  } catch {
+    /* git not available / not configured */
+  }
+  return userInfo().username;
 }
 
 /** True if `dir` is at or under any of `roots`. */
@@ -102,16 +107,21 @@ export function isExcludedLocally(cwd: string, cfg: ClaudeLensConfig): boolean {
   return isUnderAny(cwd, cfg.ignoreProjects);
 }
 
+/** True if the environment declares a global opt-out (DO_NOT_TRACK convention). */
+export function envOptedOut(): boolean {
+  const truthy = (v?: string) => v != null && v !== '' && v !== '0' && v.toLowerCase() !== 'false';
+  return truthy(process.env.DO_NOT_TRACK) || truthy(process.env.CLAUDELENS_DISABLE);
+}
+
 /**
- * Interpret the contents of a committed `.claudelens` marker. The mere presence
- * of the file signals intent to exclude, so anything ambiguous (empty file,
- * unrecognized content) errs toward EXCLUDED — nothing unintended gets tracked.
- * Recognized forms: JSON `{ "ignore": true }` / `{ "track": false }`, or a
- * `ignore: true` / `track: false` line.
+ * Interpret a committed `.claudelens` marker. The mere presence of the file
+ * signals intent to exclude, so anything ambiguous (empty, unrecognized) errs
+ * toward EXCLUDED. Forms: JSON `{ "ignore": true }` / `{ "track": false }`, or
+ * an `ignore: true` / `track: false` line.
  */
 export function markerExcludes(raw: string): boolean {
   const text = raw.trim();
-  if (!text) return true; // empty marker = "exclude this repo"
+  if (!text) return true;
   try {
     const j = JSON.parse(text) as { ignore?: unknown; track?: unknown };
     if (typeof j.ignore === 'boolean') return j.ignore;
@@ -126,13 +136,12 @@ export function markerExcludes(raw: string): boolean {
       return m[1].toLowerCase() === 'ignore' ? val : !val;
     }
   }
-  return true; // present but unrecognized → be safe, exclude
+  return true;
 }
 
 /**
  * Whether a committed `.claudelens` marker excludes this repo, found by walking
- * up from `dir` to the filesystem root (bounded). A team-shared exclusion that
- * protects a sensitive repo for everyone, no matter whose machine it's on.
+ * up from `dir` to the filesystem root (bounded).
  */
 export async function isRepoExcluded(dir: string): Promise<boolean> {
   let cur = resolve(dir);
@@ -154,15 +163,16 @@ export async function isRepoExcluded(dir: string): Promise<boolean> {
 
 /**
  * The single source of truth for "should this session sync?". Tracking is on by
- * default; this returns false only when something has opted out.
+ * default once connected; this returns false only when a switch opts out.
  */
 export async function shouldSync(
   cwd: string,
   sessionId: string | undefined,
   cfg: ClaudeLensConfig,
 ): Promise<boolean> {
+  if (!isConnected(cfg)) return false; // not connected yet — nowhere to send
   if (cfg.paused) return false;
-  if (!cfg.trackingReviewed) return false; // hasn't confirmed default-on yet
+  if (envOptedOut()) return false;
   if (isExcludedLocally(cwd, cfg)) return false;
   if (sessionId && cfg.ignoreSessions.includes(sessionId)) return false;
   if (await isRepoExcluded(cwd)) return false;

@@ -1,67 +1,62 @@
-// `claudelens status` — show current config and which projects are tracked.
-// Read-only and non-interactive, so it's safe to run anywhere (including as a
-// Claude Code skill). Tracking is on by default; this makes the exclusions and
-// the global pause visible at a glance.
-import pc from 'picocolors';
-import { loadConfig, CONFIG_PATH } from './config.js';
-import { discover, isTracked } from './projects.js';
+// `status` — invoked by the /claudelens:status skill. Read-only, non-interactive:
+// prints where sessions go, who they're attributed to, and the switch state for
+// the current project/session so the developer can see exactly what's tracked.
+import { resolve } from 'node:path';
+import { homedir } from 'node:os';
+import {
+  loadConfig,
+  isConnected,
+  resolveName,
+  isExcludedLocally,
+  isRepoExcluded,
+  envOptedOut,
+} from './config.js';
 
-export async function runStatus() {
+export async function runStatus(): Promise<void> {
   const cfg = await loadConfig();
-  if (!cfg) {
-    console.log(pc.yellow('ClaudeLens is not set up on this machine.'));
-    console.log(`Run ${pc.cyan('claudelens setup')} to configure it.`);
+  const cwd = process.cwd();
+
+  if (!isConnected(cfg)) {
+    console.log('ClaudeLens is not connected yet.');
+    console.log('Run  /claudelens:connect <server-url> <token>  once to turn tracking on.');
     return;
   }
 
-  console.log(pc.bold('\n  ClaudeLens status\n'));
-  console.log(`  ${pc.dim('Name')}     ${cfg.name}`);
-  console.log(`  ${pc.dim('Server')}   ${cfg.server}`);
-  console.log(`  ${pc.dim('Token')}    ${cfg.token ? pc.green('set') : pc.dim('(none)')}`);
-  console.log(`  ${pc.dim('Redact')}   ${cfg.redact ? 'on' : 'off'}`);
+  const repoOff = await isRepoExcluded(cwd);
+  const projOff = isExcludedLocally(cwd, cfg);
+  const globalOff = cfg.paused || envOptedOut();
+
+  const trackingHere = !globalOff && !projOff && !repoOff;
+
+  console.log('ClaudeLens');
+  console.log(`  Server    ${cfg.server}`);
+  console.log(`  Author    ${resolveName(cfg)}`);
+  console.log(`  Global    ${cfg.paused ? 'PAUSED' : envOptedOut() ? 'disabled by env (DO_NOT_TRACK)' : 'on'}`);
+  console.log(`  This dir  ${cwd.replace(homedir(), '~')}`);
   console.log(
-    `  ${pc.dim('Sync')}     ${
-      cfg.paused
-        ? pc.yellow('paused — nothing syncs')
-        : cfg.trackingReviewed
-          ? pc.green('on (tracking by default)')
-          : pc.yellow('not reviewed yet — run `claudelens projects`')
+    `            ${
+      trackingHere
+        ? 'tracked ✓'
+        : repoOff
+          ? 'excluded by committed .claudelens (team-wide)'
+          : projOff
+            ? 'excluded (you ran /claudelens:untrack-project)'
+            : 'not tracked (global pause/opt-out)'
     }`,
   );
-  console.log(`  ${pc.dim('Config')}   ${CONFIG_PATH}`);
 
-  // Live server check.
+  if (cfg.ignoreProjects.length) {
+    console.log(`  Excluded projects (${cfg.ignoreProjects.length}):`);
+    for (const p of cfg.ignoreProjects) console.log(`    · ${resolve(p).replace(homedir(), '~')}`);
+  }
+  if (cfg.ignoreSessions.length) {
+    console.log(`  Excluded sessions: ${cfg.ignoreSessions.length}`);
+  }
+  // Live health check.
   try {
     const r = await fetch(`${cfg.server}/api/health`, { signal: AbortSignal.timeout(3000) });
-    console.log(`  ${pc.dim('Health')}   ${r.ok ? pc.green('reachable') : pc.red(`HTTP ${r.status}`)}`);
+    console.log(`  Health    ${r.ok ? 'reachable' : `HTTP ${r.status}`}`);
   } catch {
-    console.log(`  ${pc.dim('Health')}   ${pc.red('unreachable')}`);
+    console.log('  Health    unreachable');
   }
-
-  const projects = await discover();
-  const tracked = projects.filter((pr) => !pr.repoExcluded && isTracked(pr.cwd, cfg));
-
-  console.log(
-    pc.bold(
-      `\n  Projects  ${pc.green(`${tracked.length} tracked`)} · ${pc.dim(
-        `${projects.length - tracked.length} excluded`,
-      )}\n`,
-    ),
-  );
-  for (const pr of projects) {
-    const repoOff = pr.repoExcluded;
-    const on = !repoOff && isTracked(pr.cwd, cfg);
-    const mark = on ? pc.green('✓') : pc.dim('·');
-    const label = on ? pr.label : pc.dim(pr.label);
-    const tag = repoOff ? pc.dim('  (repo .claudelens)') : '';
-    console.log(`  ${mark} ${label} ${pc.dim(`(${pr.sessions})`)}${tag}`);
-  }
-
-  if (cfg.ignoreSessions.length) {
-    console.log(pc.dim(`\n  ${cfg.ignoreSessions.length} individual session(s) excluded.`));
-  }
-  console.log(
-    `\n  Exclude the current project with ${pc.cyan('claudelens untrack')}, ` +
-      `or review all with ${pc.cyan('claudelens projects')}\n`,
-  );
 }

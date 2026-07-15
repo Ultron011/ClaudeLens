@@ -12,10 +12,6 @@
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v",
     "db:migrate": "pnpm --filter server migrate",
-    "cli": "pnpm --filter @claudelens/cli start",
-    "setup": "pnpm --filter @claudelens/cli setup",
-    "projects": "pnpm --filter @claudelens/cli projects",
-    "status": "pnpm --filter @claudelens/cli status",
     "plugin:build": "pnpm --filter @claudelens/cli build:plugin",
     "typecheck": "pnpm -r typecheck"
   },

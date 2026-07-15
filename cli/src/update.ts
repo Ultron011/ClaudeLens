@@ -1,46 +1,53 @@
-// `claudelens update` — pull the latest code and rebuild the bundle, so both
-// the `claudelens` command and the Stop-hook sync run the newest version with
-// no plugin reinstall. Works because the installed `claudelens` command and the
-// hook both point at this repo's bundle.
+// `update` — invoked by /claudelens:update. Pulls the latest committed bundle so
+// the Stop-hook sync runs the newest version. The plugin ships its bundle
+// (plugin/dist/claudelens.mjs) committed, so a fast-forward pull of the checkout
+// that contains it is enough — no rebuild required. If a full monorepo with
+// pnpm is present (a dev clone), we also rebuild, best-effort.
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { dirname, resolve, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import pc from 'picocolors';
 
 function run(cmd: string, args: string[], cwd: string): boolean {
   const r = spawnSync(cmd, args, { cwd, stdio: 'inherit' });
   return r.status === 0;
 }
 
-export async function runUpdate() {
-  // bundle lives at <repo>/plugin/dist/claudelens.mjs
-  const bundle = fileURLToPath(import.meta.url);
-  const repo = resolve(dirname(bundle), '..', '..');
+/** Nearest ancestor of `start` that is a git checkout, or undefined. */
+function findGitRoot(start: string): string | undefined {
+  let cur = resolve(start);
+  for (let i = 0; i < 40; i++) {
+    if (existsSync(join(cur, '.git'))) return cur;
+    const parent = dirname(cur);
+    if (parent === cur) return undefined;
+    cur = parent;
+  }
+  return undefined;
+}
 
-  if (!existsSync(join(repo, '.git'))) {
-    console.error(pc.red(`Can't find the ClaudeLens git clone at ${repo}.`));
-    console.error(
-      'Update from your clone (where you ran `claudelens install`), or reinstall the plugin in Claude Code.',
-    );
-    process.exit(1);
+export async function runUpdate(): Promise<void> {
+  const bundleDir = dirname(fileURLToPath(import.meta.url)); // .../dist
+  const repo = findGitRoot(bundleDir);
+
+  if (!repo) {
+    console.log("Couldn't find a git checkout for this plugin.");
+    console.log('Update it from Claude Code with:  /plugin  →  update  (or re-add the marketplace).');
+    return;
   }
 
-  console.log(pc.dim(`Updating ClaudeLens in ${repo}\n`));
-
+  console.log(`Updating ClaudeLens in ${repo}`);
   if (!run('git', ['-C', repo, 'pull', '--ff-only'], repo)) {
-    console.error(pc.red('\ngit pull failed — resolve it in the repo, then retry.'));
-    process.exit(1);
+    console.log('git pull failed — resolve it in the checkout, then retry.');
+    return;
   }
 
-  // Rebuild the bundle from the pulled source (best-effort: the committed
-  // bundle is already current, so a missing pnpm is not fatal).
-  console.log(pc.dim('\nRebuilding bundle…'));
-  const built = run('pnpm', ['--filter', '@claudelens/cli', 'build:plugin'], repo);
-  if (!built) {
-    console.log(pc.yellow('(skipped rebuild — using the committed bundle from the pull)'));
+  // Rebuild only if this is a full dev clone with the workspace present.
+  if (existsSync(join(repo, 'pnpm-workspace.yaml'))) {
+    console.log('Rebuilding bundle…');
+    if (!run('pnpm', ['--filter', '@claudelens/cli', 'build:plugin'], repo)) {
+      console.log('(skipped rebuild — using the committed bundle from the pull)');
+    }
   }
 
-  console.log(pc.green('\n✔ Updated.'));
-  console.log(pc.dim('Takes effect on the next turn / command — no plugin reinstall needed.'));
+  console.log('✔ Updated. Takes effect on the next turn — no reinstall needed.');
 }

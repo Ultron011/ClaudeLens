@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "claudelens sync 2>/dev/null || node \"${CLAUDE_PLUGIN_ROOT}\"/dist/claudelens.mjs sync"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/dist/claudelens.mjs sync"
           }
         ]
       }

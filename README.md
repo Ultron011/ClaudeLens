@@ -29,11 +29,15 @@ session files so it stands alone.
                                           └──────────────┘
 ```
 
-- **Tracking is on by default, with an explicit consent gate.** During setup the
-  developer sees a review checklist of every project — all ticked — and unticks
-  the ones they don't want captured. Nothing syncs until they pass that screen,
-  and any project can be opted out later (per project, per session, whole-repo,
-  or a global pause).
+- **Install and it just works.** A teammate installs the plugin and runs
+  `/claudelens:connect <server> <token>` once; from then on every session in
+  every project syncs automatically after each turn — no terminal, no per-project
+  setup.
+- **Opt-out is a switch, checked before anything is sent.** `/claudelens:untrack`
+  (this session), `/claudelens:untrack-project` (this repo — or the whole team via
+  a committed `.claudelens`), and `/claudelens:pause` (everything) all take effect
+  *before* the next upload. Flip one at the start of a session and nothing from
+  that scope ever leaves the machine. `DO_NOT_TRACK=1` is honored too.
 - The parser extracts turns, token usage, an **estimated cost**, and the
   **tools / skills / subagents** used from the raw JSONL.
 - The dashboard shows a searchable gallery, per-contributor and per-skill
@@ -46,7 +50,7 @@ session files so it stands alone.
 claudelens/
 ├── shared/   parser, analyzer, pricing, secret redaction, shared types
 ├── server/   Express + Postgres ingest + query API
-├── cli/      interactive opt-in publisher (reads ~/.claude/projects)
+├── cli/      the plugin's engine — Stop-hook sync + /claudelens:* ops (bundled to plugin/dist)
 ├── web/      React + Vite dashboard
 └── docker-compose.yml   local Postgres
 ```
@@ -61,12 +65,16 @@ pnpm install
 pnpm db:up          # Postgres on :5544
 pnpm db:migrate     # create schema
 pnpm dev            # server :4000 + web :5173
-
-# in another terminal — publish one of your own sessions:
-pnpm cli
 ```
 
-Open http://localhost:5173.
+Open http://localhost:5173. To exercise the tracker's sync path without the
+plugin, feed a Stop-hook payload to the bundle on stdin:
+
+```bash
+pnpm plugin:build
+echo '{"transcript_path":"<a .jsonl>","cwd":"<dir>","session_id":"<id>"}' \
+  | node plugin/dist/claudelens.mjs sync
+```
 
 ## Deploying for your team
 
@@ -98,21 +106,26 @@ Push it to GitHub, then each teammate runs, inside Claude Code:
 ```
 /plugin marketplace add <owner>/<repo>
 /plugin install claudelens@claudelens
-/claudelens:setup          # enter your name + the server URL + token
+/claudelens:connect <server-url> <token>   # once — turns tracking on
 ```
 
-`/claudelens:setup` ends with a **review checklist** — tracking is on by default,
-so it shows every project you've used Claude Code in (all ticked) and you untick
-the ones you don't want captured. **Nothing syncs until you pass that screen.**
-From then on tracked projects sync automatically after each turn. Opt out later
-however you like:
+`connect` stores the server + token and **excludes its own session**, so the
+token you type is never uploaded. From then on every project/session syncs
+automatically after each turn. There is **no terminal CLI** — everything is a
+slash command:
 
-- `claudelens untrack` — stop tracking the current project (this machine).
-- `claudelens untrack --shared` — write a committed `.claudelens` that excludes
-  the repo for the **whole team** (commit it).
-- `claudelens sessions` — exclude individual sessions inside a tracked project.
-- `claudelens pause` / `resume` — a global kill-switch for all syncing.
-- `claudelens projects` — re-open the review checklist anytime.
+| Command | Effect |
+| --- | --- |
+| `/claudelens:untrack` | Stop tracking **this session** (run it first → nothing is ever sent) |
+| `/claudelens:untrack-project` | Stop tracking **this project** (add `--team` → committed `.claudelens`, excludes the repo for everyone) |
+| `/claudelens:track`, `/claudelens:track-project` | Undo the above |
+| `/claudelens:pause` / `resume` | Global kill-switch |
+| `/claudelens:status` | What's tracked right now |
+| `/claudelens:update` | Pull the latest bundle |
+
+Every switch is checked **before** any upload, so opting out at the start of a
+session guarantees nothing for that scope reaches the dashboard. Author identity
+is auto-derived from `git config user.name` (override with `CLAUDELENS_NAME`).
 
 > After changing `cli/` or `shared/`, run `pnpm plugin:build` and commit the
 > updated `plugin/dist/*.mjs` — that bundle is what the installed plugin runs.
@@ -123,8 +136,10 @@ however you like:
 | ------------------- | ------- | -------------------------------------------------- |
 | `DATABASE_URL`      | server  | Postgres connection string                         |
 | `PORT`              | server  | API port (default 4000)                            |
-| `CLAUDELENS_SERVER` | cli     | Ingest target (default `http://localhost:4000`)    |
+| `CLAUDELENS_SERVER` | plugin  | Ingest target, if not set via `/claudelens:connect` |
 | `CLAUDELENS_TOKEN`  | both    | Shared bearer token to gate ingest (required in prod compose) |
+| `CLAUDELENS_NAME`   | plugin  | Override the auto-derived author name              |
+| `DO_NOT_TRACK` / `CLAUDELENS_DISABLE` | plugin | Set to `1` to disable all syncing (honored globally) |
 | `CLAUDELENS_PORT`   | deploy  | Host port the prod container exposes (default 4000) |
 | `POSTGRES_PASSWORD` | deploy  | Password for the bundled Postgres in prod compose  |
 

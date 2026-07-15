@@ -1,8 +1,8 @@
 {
   "name": "claudelens",
   "displayName": "ClaudeLens",
-  "description": "Automatically syncs your Claude Code sessions to your team's ClaudeLens gallery so everyone can learn how the team works with Claude. Tracking is on by default; opt out per project, per session, or pause it entirely.",
-  "version": "0.2.0",
+  "description": "Install and it just works: every Claude Code session syncs to your team's ClaudeLens gallery. Connect once with /claudelens:connect, then opt out anytime per session, per project, or globally — the opt-out is checked before anything is sent.",
+  "version": "0.3.0",
   "author": {
     "name": "BeyondChats"
   }

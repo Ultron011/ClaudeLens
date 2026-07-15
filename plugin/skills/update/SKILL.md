@@ -1,16 +1,14 @@
 ---
-description: Update ClaudeLens to the latest version — pulls the code and rebuilds. No plugin uninstall/reinstall needed.
+description: Update ClaudeLens to the latest version — pulls the newest bundle so the tracker runs the current code. No reinstall needed.
 ---
 
-Update the user's ClaudeLens install. This is non-interactive (it runs
-git + a rebuild), so you can run it and relay the output:
+Update the plugin in place. Run and relay the output:
 
-```
+```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" update
 ```
 
-If it reports it can't find the git clone, the plugin was installed without a
-local clone — tell the user to run it from their cloned repo instead
-(`claudelens update`), or reinstall the plugin in Claude Code for that one-off.
-It updates both the `claudelens` command and the Stop-hook sync; changes take
-effect on the next turn with no reinstall.
+It fast-forwards the plugin's git checkout to the latest committed bundle (and
+rebuilds if run from a full dev clone). Takes effect on the next turn. If it says
+it can't find a git checkout, tell the user to update via Claude Code's `/plugin`
+menu instead.
