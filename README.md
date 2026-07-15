@@ -30,7 +30,7 @@ session files so it stands alone.
 ```
 
 - **Install and it just works.** A teammate installs the plugin and runs
-  `/claudelens:connect <server> <token>` once; from then on every session in
+  `/claudelens:connect <server> <token> <name>` once; from then on every session in
   every project syncs automatically after each turn — no terminal, no per-project
   setup.
 - **Opt-out is a switch, checked before anything is sent.** `/claudelens:untrack`
@@ -106,13 +106,14 @@ Push it to GitHub, then each teammate runs, inside Claude Code:
 ```
 /plugin marketplace add <owner>/<repo>
 /plugin install claudelens@claudelens
-/claudelens:connect <server-url> <token>   # once — turns tracking on
+/claudelens:connect <server-url> <token> <your display name>   # once — turns tracking on
 ```
 
-`connect` stores the server + token and **excludes its own session**, so the
-token you type is never uploaded. From then on every project/session syncs
-automatically after each turn. There is **no terminal CLI** — everything is a
-slash command:
+`connect` stores the server + token + the **display name** your sessions appear
+under, and **excludes its own session** so the token you type is never uploaded.
+(Skip the name and it falls back to `git config user.name`, then the OS
+username.) From then on every project/session syncs automatically after each
+turn. There is **no terminal CLI** — everything is a slash command:
 
 | Command | Effect |
 | --- | --- |
@@ -125,7 +126,8 @@ slash command:
 
 Every switch is checked **before** any upload, so opting out at the start of a
 session guarantees nothing for that scope reaches the dashboard. Author identity
-is auto-derived from `git config user.name` (override with `CLAUDELENS_NAME`).
+comes from the name you pass to `connect` (or `CLAUDELENS_NAME`, then
+`git config user.name`, then the OS username).
 
 > After changing `cli/` or `shared/`, run `pnpm plugin:build` and commit the
 > updated `plugin/dist/*.mjs` — that bundle is what the installed plugin runs.

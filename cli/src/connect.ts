@@ -24,16 +24,18 @@ function parse(argv: string[]): Args {
     else if (a === '--server') out.server = argv[++i];
     else if (!a.startsWith('-')) positionals.push(a);
   }
-  // Positional order: <server> <token>
+  // Positional order: <server> <token> <display name...>
+  // The name is everything after the token, so a multi-word name works unquoted.
   if (!out.server && positionals[0]) out.server = positionals[0];
   if (!out.token && positionals[1]) out.token = positionals[1];
+  if (!out.name && positionals.length > 2) out.name = positionals.slice(2).join(' ');
   return out;
 }
 
 export async function runConnect(): Promise<void> {
   const args = parse(process.argv.slice(3));
   if (!args.server) {
-    console.error('Usage: connect <server-url> <token>');
+    console.error('Usage: connect <server-url> <token> <your display name>');
     process.exit(1);
   }
 

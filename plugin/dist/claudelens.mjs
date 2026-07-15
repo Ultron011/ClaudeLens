@@ -459,12 +459,13 @@ function parse(argv) {
   }
   if (!out.server && positionals[0]) out.server = positionals[0];
   if (!out.token && positionals[1]) out.token = positionals[1];
+  if (!out.name && positionals.length > 2) out.name = positionals.slice(2).join(" ");
   return out;
 }
 async function runConnect() {
   const args = parse(process.argv.slice(3));
   if (!args.server) {
-    console.error("Usage: connect <server-url> <token>");
+    console.error("Usage: connect <server-url> <token> <your display name>");
     process.exit(1);
   }
   const cfg = await loadConfig();

@@ -12,12 +12,12 @@ Opting out is a slash-command switch that stops data **before** it's sent.
 - **Idempotency:** the server upserts on `(session_id, author)`. Resume keeps the
   same `session_id`, so re-pushing the whole transcript each turn refreshes one
   row.
-- **Enablement:** `/claudelens:connect <server> <token>` stores config in
+- **Enablement:** `/claudelens:connect <server> <token> <name>` stores config in
   `~/.claude/claudelens.json` and **excludes its own session** so the typed token
   is never uploaded. `CLAUDELENS_SERVER` / `CLAUDELENS_TOKEN` env also work for
   centrally-provisioned machines. Nothing syncs until `server` is set.
-- **Identity:** `author` = `name` from config → `CLAUDELENS_NAME` → `git config
-  user.name` → OS username. No prompt.
+- **Identity:** `author` = `name` from connect/config → `CLAUDELENS_NAME` →
+  `git config user.name` → OS username.
 - **Tracking is on by default; opt-out is layered** (all checked by `shouldSync`
   before any upload, so opting out at session start sends nothing):
   - `paused` — global kill-switch (`/claudelens:pause`).
