@@ -29,6 +29,10 @@ async function main() {
       return (await import('./status.js')).runStatus();
     case 'update': // /claudelens:update
       return (await import('./update.js')).runUpdate();
+    case 'list-projects': // /claudelens:sync-history (step 1: enumerate)
+      return (await import('./history.js')).runListProjects();
+    case 'sync-history': // /claudelens:sync-history (step 2: upload selection)
+      return (await import('./history.js')).runSyncHistory();
     default:
       console.error(
         `ClaudeLens is a Claude Code plugin — use the /claudelens:* commands, not a terminal.\n` +

@@ -281,7 +281,8 @@ async function loadConfig() {
       ignoreProjects: parsed.ignoreProjects ?? [],
       ignoreSessions: parsed.ignoreSessions ?? [],
       paused: parsed.paused ?? false,
-      redact: parsed.redact ?? false
+      redact: parsed.redact ?? false,
+      backfilledSessions: parsed.backfilledSessions ?? []
     };
   } catch {
     return {
@@ -374,7 +375,8 @@ var init_config = __esm({
       ignoreProjects: [],
       ignoreSessions: [],
       paused: false,
-      redact: false
+      redact: false,
+      backfilledSessions: []
     };
   }
 });
@@ -749,6 +751,175 @@ var init_update = __esm({
   }
 });
 
+// src/history.ts
+var history_exports = {};
+__export(history_exports, {
+  runListProjects: () => runListProjects,
+  runSyncHistory: () => runSyncHistory
+});
+import { readdir as readdir2, readFile as readFile5, stat as stat2 } from "node:fs/promises";
+import { homedir as homedir5 } from "node:os";
+import { join as join4 } from "node:path";
+async function jsonlFiles(dir) {
+  try {
+    return (await readdir2(dir)).filter((f) => f.endsWith(".jsonl"));
+  } catch {
+    return [];
+  }
+}
+async function peek(path) {
+  let raw;
+  try {
+    raw = await readFile5(path, "utf8");
+  } catch {
+    return {};
+  }
+  let cwd;
+  let sessionId;
+  let scanned = 0;
+  for (const line of raw.split("\n")) {
+    if (!line.trim()) continue;
+    if (++scanned > 80) break;
+    try {
+      const e = JSON.parse(line);
+      cwd ??= e.cwd;
+      sessionId ??= e.sessionId;
+    } catch {
+    }
+    if (cwd && sessionId) break;
+  }
+  return { cwd, sessionId };
+}
+async function listProjects() {
+  const cfg = await loadConfig();
+  let dirNames;
+  try {
+    dirNames = (await readdir2(PROJECTS_DIR2, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return [];
+  }
+  const entries = [];
+  for (const dir of dirNames) {
+    const full = join4(PROJECTS_DIR2, dir);
+    const files = await jsonlFiles(full);
+    if (!files.length) continue;
+    let cwd;
+    let synced = 0;
+    let lastMtime = 0;
+    for (const f of files) {
+      const path = join4(full, f);
+      const [{ cwd: fileCwd, sessionId }, st] = await Promise.all([peek(path), stat2(path)]);
+      cwd ??= fileCwd;
+      if (sessionId && cfg.backfilledSessions.includes(sessionId)) synced++;
+      if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
+    }
+    entries.push({
+      index: entries.length + 1,
+      dir,
+      cwd,
+      sessions: files.length,
+      synced,
+      lastActivity: lastMtime ? new Date(lastMtime).toISOString() : void 0
+    });
+  }
+  return entries;
+}
+async function runListProjects() {
+  const cfg = await loadConfig();
+  if (!isConnected(cfg)) {
+    console.log("Not connected. Run /claudelens:connect <server-url> <token> <name> first.");
+    return;
+  }
+  const entries = await listProjects();
+  if (!entries.length) {
+    console.log("No project history found under ~/.claude/projects.");
+    return;
+  }
+  console.log(JSON.stringify(entries, null, 2));
+}
+function selectDirs(all) {
+  const rest = process.argv.slice(3).filter((a) => !a.startsWith("--"));
+  if (process.argv.slice(3).includes("--all")) return all.map((e) => e.dir);
+  const out = [];
+  for (const arg of rest) {
+    const n = Number(arg);
+    const byIndex = Number.isInteger(n) ? all.find((e) => e.index === n) : void 0;
+    const byDir = all.find((e) => e.dir === arg);
+    const byCwd = all.find((e) => e.cwd === arg);
+    const match = byIndex ?? byDir ?? byCwd;
+    if (match) out.push(match.dir);
+  }
+  return [...new Set(out)];
+}
+async function runSyncHistory() {
+  const cfg = await loadConfig();
+  if (!isConnected(cfg)) {
+    console.log("Not connected. Run /claudelens:connect <server-url> <token> <name> first.");
+    return;
+  }
+  const force = process.argv.slice(3).includes("--force");
+  const all = await listProjects();
+  const dirs = selectDirs(all);
+  if (!dirs.length) {
+    console.log("No matching projects selected. Pass indices or dir names from list-projects, or --all.");
+    return;
+  }
+  const author = resolveName(cfg);
+  let synced = 0;
+  let skipped = 0;
+  let failed = 0;
+  for (const dir of dirs) {
+    const full = join4(PROJECTS_DIR2, dir);
+    for (const f of await jsonlFiles(full)) {
+      const path = join4(full, f);
+      try {
+        const session = parseTranscript(await readFile5(path, "utf8"));
+        if (!session.sessionId || session.sessionId === "unknown" || session.stats.turns < 1) continue;
+        if (!force && cfg.backfilledSessions.includes(session.sessionId)) {
+          skipped++;
+          continue;
+        }
+        if (session.cwd && !await shouldSync(session.cwd, session.sessionId, cfg)) {
+          skipped++;
+          continue;
+        }
+        if (cfg.redact) {
+          session.turns = redactDeep(session.turns).value;
+          if (session.stats.firstUserPrompt) {
+            session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
+          }
+        }
+        const payload = { session, author };
+        const res = await fetch(`${cfg.server}/api/sessions`, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
+          },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error(`server responded ${res.status}`);
+        if (!cfg.backfilledSessions.includes(session.sessionId)) cfg.backfilledSessions.push(session.sessionId);
+        synced++;
+      } catch (err) {
+        failed++;
+        if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
+      }
+    }
+    await saveConfig(cfg);
+  }
+  console.log(`\u2714 Synced ${synced} session(s). Skipped ${skipped} (already synced or excluded). Failed ${failed}.`);
+}
+var PROJECTS_DIR2;
+var init_history = __esm({
+  "src/history.ts"() {
+    "use strict";
+    init_src();
+    init_config();
+    PROJECTS_DIR2 = join4(homedir5(), ".claude", "projects");
+  }
+});
+
 // src/cli.ts
 var op = process.argv[2];
 async function main() {
@@ -773,6 +944,10 @@ async function main() {
       return (await Promise.resolve().then(() => (init_status(), status_exports))).runStatus();
     case "update":
       return (await Promise.resolve().then(() => (init_update(), update_exports))).runUpdate();
+    case "list-projects":
+      return (await Promise.resolve().then(() => (init_history(), history_exports))).runListProjects();
+    case "sync-history":
+      return (await Promise.resolve().then(() => (init_history(), history_exports))).runSyncHistory();
     default:
       console.error(
         `ClaudeLens is a Claude Code plugin \u2014 use the /claudelens:* commands, not a terminal.

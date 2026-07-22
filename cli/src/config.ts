@@ -11,6 +11,10 @@
 //   • a committed `.claudelens` file           excludes a repo for the WHOLE team
 //   • DO_NOT_TRACK / CLAUDELENS_DISABLE env    honored as a global opt-out
 //
+// backfilledSessions records session ids already uploaded by /claudelens:sync-history
+// (the bulk backfill command), purely so re-running it skips unchanged old
+// sessions — the server itself dedups on (session_id, author) regardless.
+//
 // Config lives at ~/.claude/claudelens.json (survives plugin updates). Nothing
 // syncs until `server` is set — connecting is the enablement step.
 import { readFile, writeFile } from 'node:fs/promises';
@@ -38,6 +42,8 @@ export interface ClaudeLensConfig {
   paused: boolean;
   /** Run secret redaction before upload. */
   redact: boolean;
+  /** Session ids already uploaded via /claudelens:sync-history. */
+  backfilledSessions: string[];
 }
 
 const EMPTY: ClaudeLensConfig = {
@@ -45,6 +51,7 @@ const EMPTY: ClaudeLensConfig = {
   ignoreSessions: [],
   paused: false,
   redact: false,
+  backfilledSessions: [],
 };
 
 export async function loadConfig(): Promise<ClaudeLensConfig> {
@@ -59,6 +66,7 @@ export async function loadConfig(): Promise<ClaudeLensConfig> {
       ignoreSessions: parsed.ignoreSessions ?? [],
       paused: parsed.paused ?? false,
       redact: parsed.redact ?? false,
+      backfilledSessions: parsed.backfilledSessions ?? [],
     };
   } catch {
     // No config file yet — fall back to env so a centrally-provisioned machine
