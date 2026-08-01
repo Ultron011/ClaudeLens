@@ -1,9 +1,5 @@
 # Product
 
-## Register
-
-product
-
 ## Users
 
 Engineers and interns on the BeyondChats team who use Claude Code daily. They
