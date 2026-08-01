@@ -51,8 +51,15 @@ function summaryRow(r: any) {
 }
 
 // coalesce(account_email, author) = identity — old rows still group by author alone.
+//
+// The trailing `OR author = $n` is load-bearing, not redundant: `/api/stats` reports an author's
+// `identity` as their account *email* once one is known, but the UI routes people by display
+// name (`/u/:author`, `/analytics/u/:author`) because that's what reads in a URL and a crumb.
+// Without this branch, `?identity=Saurabh` matched zero rows the moment that person had an
+// account email, and the whole per-person analytics page rendered as zeros with no error.
+// Accepting either key keeps both the email and the display name working as a scope.
 const IDENTITY_CLAUSE = (n: number) =>
-  `(account_email = $${n} OR (account_email IS NULL AND author = $${n}))`;
+  `(account_email = $${n} OR (account_email IS NULL AND author = $${n}) OR author = $${n})`;
 
 // Genuine human messages, with the userTurns fallback for parser_version 0-2 rows.
 const USER_MESSAGES_EXPR =
