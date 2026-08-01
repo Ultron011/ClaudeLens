@@ -76,6 +76,10 @@
 .data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
 .data-table td {
   padding: 11px var(--s4); border-top: 1px solid var(--border-soft); vertical-align: middle;
+  /* Long titles/account names/paths have no natural break points (e.g. a long unbroken file
+   * path), so on desktop — where .table-scroll deliberately never gets overflow-x (see above) —
+   * they'd otherwise paint straight past the column and over whatever sits next to the table. */
+  overflow-wrap: anywhere;
 }
 .data-table tbody tr { transition: background var(--t-fast) var(--ease); }
 .data-table tbody tr:hover { background: var(--bg-raised); }

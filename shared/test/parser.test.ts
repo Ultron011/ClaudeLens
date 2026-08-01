@@ -140,3 +140,17 @@ test('sum of daily userMessages equals stats.userMessages', () => {
   const sum = Object.values(stats.daily).reduce((a, d) => a + d.userMessages, 0);
   assert.equal(sum, stats.userMessages);
 });
+
+test('an injected skill body is skipped by the firstUserPrompt title fallback', () => {
+  const skillBody = line({
+    message: {
+      role: 'user',
+      content:
+        'Base directory for this skill: /home/soul/.claude/plugins/cache/claudelens/claudelens/0.5.0/skills/connect\n\nOne-time setup instructions the human never typed.',
+    },
+  });
+  const realPrompt = line({ message: { role: 'user', content: 'actually fix the login bug' } });
+  const { title, stats } = parseTranscript([skillBody, realPrompt].join('\n'));
+  assert.equal(stats.firstUserPrompt, 'actually fix the login bug');
+  assert.equal(title, 'actually fix the login bug');
+});
