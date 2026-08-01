@@ -1,4 +1,35 @@
-import { useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState } from 'react';
+
+/** Tracks an element's content-box width, so the SVG viewBox can be authored in real pixels.
+ *
+ * Without this the chart set `width="100%"` on a fixed `viewBox="0 0 640 H"` and let the default
+ * `preserveAspectRatio="xMidYMid meet"` letterbox it: in a panel wider than 640 the whole drawing
+ * scaled to fit the *height* and sat centred, leaving dead gutters on both sides. Measuring means
+ * one drawing unit is one CSS pixel at every container width — axis labels and stroke weights stay
+ * the size they were authored at instead of scaling with the panel. */
+function useWidth<T extends HTMLElement>(fallback = 640) {
+  const ref = useRef<T>(null);
+  const [w, setW] = useState(fallback);
+
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Measure synchronously first. Waiting for the observer's first callback means one painted
+    // frame at the 640px fallback, which on a 380px phone panel is a chart drawn well past the
+    // card's right edge before it snaps back.
+    if (el.clientWidth > 0) setW(el.clientWidth);
+    // ResizeObserver is in every browser this app targets; the guard keeps SSR/jsdom safe.
+    if (typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(([entry]) => {
+      const next = entry.contentRect.width;
+      if (next > 0) setW(next);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [fallback]);
+
+  return [ref, w] as const;
+}
 
 export interface Series {
   key: string;
@@ -26,9 +57,9 @@ export function Chart({
 }) {
   const [active, setActive] = useState<number | null>(null);
   const svgRef = useRef<SVGSVGElement>(null);
+  const [wrapRef, W] = useWidth<HTMLDivElement>();
 
   const n = labels.length;
-  const W = 640;
   const padL = 44;
   const padR = 12;
   const padT = 10;
@@ -74,14 +105,14 @@ export function Chart({
   );
 
   return (
-    <div className="chart" onKeyDown={onKeyDown}>
+    <div className="chart" ref={wrapRef} onKeyDown={onKeyDown}>
       <svg
         ref={svgRef}
         role="img"
         aria-label={ariaLabel}
         tabIndex={0}
         viewBox={`0 0 ${W} ${height}`}
-        width="100%"
+        width={W}
         height={height}
         onPointerMove={(e) => moveTo(e.clientX)}
         onPointerLeave={() => setActive(null)}
@@ -140,24 +171,41 @@ export function Chart({
             const step = Math.max(1, Math.ceil(n / 8));
             if (i !== 0 && i !== n - 1 && i % step !== 0) return null;
             return (
-              <text key={i} x={xBand(i) + bandW / 2} y={height - 6} textAnchor="middle" fontSize={10} fill="var(--text-faint)">
+              // Bars are centred in their band; area/line points sit on xPoint(i). Using the
+              // band centre for both put every area-chart label about half a band off the point
+              // it names.
+              <text
+                key={i}
+                x={kind === 'bars' ? xBand(i) + bandW / 2 : xPoint(i)}
+                y={height - 6}
+                textAnchor="middle"
+                fontSize={10}
+                fill="var(--text-faint)"
+              >
                 {l}
               </text>
             );
           })}
       </svg>
 
-      {active != null && n > 0 && (
-        <div className="chart-readout" role="status" aria-live="polite">
-          <strong>{labels[active]}</strong>
-          {series.map((s) => (
-            <span key={s.key}>
-              <i style={{ background: s.color }} aria-hidden />
-              {s.label}: {(series.length === 1 ? totals[active] : at(s.values[active])).toLocaleString()}
-            </span>
-          ))}
-        </div>
-      )}
+      {/* Always in the DOM, even with no active point. Rendering it conditionally made the
+       * element appear on the first hover/click and shove every panel below it down the page —
+       * the readout has to reserve its own row up front. `.chart-readout` carries a min-height
+       * for the same reason, so a one-series readout and a four-series one can't resize it. */}
+      <div className="chart-readout" role="status" aria-live="polite">
+        {active != null && n > 0 && (
+          <>
+            <strong>{labels[active]}</strong>
+            {series.map((s) => (
+              <span key={s.key}>
+                <i style={{ background: s.color }} aria-hidden />
+                {s.label}:{' '}
+                {(series.length === 1 ? totals[active] : at(s.values[active])).toLocaleString()}
+              </span>
+            ))}
+          </>
+        )}
+      </div>
 
       {series.length >= 2 && (
         <div className="chart-legend">

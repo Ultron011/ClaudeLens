@@ -2,6 +2,7 @@ import { Link } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
 import { fmtDate, fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Stat } from './Stat.js';
+import { Icon } from './Icon.js';
 import { DataTable, type Column } from './DataTable.js';
 
 export interface SessionListProps {
@@ -74,21 +75,16 @@ export function SessionList({ sessions, layout, onDelete, showProject = false }:
       },
       { key: 'models', header: 'Models', render: (s) => s.stats.models.join(', ') || '—' },
       {
-        key: 'mode',
-        header: 'Mode',
-        render: (s) => (s.usedAutoMode ? '⚡ auto' : s.permissionModes?.[0] ?? '—'),
-      },
-      {
         key: 'delete',
         header: <span className="sr-only">Delete</span>,
         render: (s) => (
           <button
             type="button"
-            className="chip danger"
+            className="chip danger icon row-action"
             aria-label={`Delete session ${s.title}`}
             onClick={() => onDelete(s)}
           >
-            ⨯
+            <Icon name="trash" size={13} />
           </button>
         ),
       },
@@ -128,7 +124,7 @@ function SessionCard({
               {s.hidden && <span className="badge-hidden">hidden</span>}
               {s.featured && (
                 <span className="star" title="Featured">
-                  ★
+                  <Icon name="star" filled />
                 </span>
               )}
             </div>
@@ -180,8 +176,13 @@ function SessionCard({
         )}
       </div>
       <div className="card-actions">
-        <button type="button" className="chip danger" aria-label={`Delete session: ${s.title}`} onClick={onDelete}>
-          ⨯
+        <button
+          type="button"
+          className="chip danger icon"
+          aria-label={`Delete session: ${s.title}`}
+          onClick={onDelete}
+        >
+          <Icon name="trash" size={13} />
         </button>
       </div>
     </article>

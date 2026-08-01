@@ -1,12 +1,17 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
+import { Icon } from './Icon.js';
 
 export interface Crumb {
   label: string;
   to?: string;
 }
 
-/** App shell: sticky top bar with brand + optional breadcrumb trail + actions. */
+/** Per-page chrome: the sticky breadcrumb bar plus the page container.
+ *
+ * The persistent left rail lives one level up in `AppLayout` (a layout route), so it is NOT
+ * remounted per page — this component only owns what actually changes between routes. `tagline`
+ * is the fallback line shown on the root page, where there are no crumbs to render. */
 export function Shell({
   crumbs = [],
   tagline,
@@ -19,14 +24,11 @@ export function Shell({
   children: ReactNode;
 }) {
   return (
-    <div className="app">
+    <>
       <header className="topbar">
         <nav className="crumbs" aria-label="Breadcrumb">
-          <Link to="/" className="brand">
-            <span className="logo" aria-hidden>
-              ◑
-            </span>
-            ClaudeLens
+          <Link to="/" className="crumb-home" aria-label="Overview">
+            <Icon name="home" />
           </Link>
           {crumbs.map((c, i) => (
             <span className="crumb" key={i}>
@@ -36,11 +38,20 @@ export function Shell({
               {c.to ? <Link to={c.to}>{c.label}</Link> : <span aria-current="page">{c.label}</span>}
             </span>
           ))}
-          {crumbs.length === 0 && tagline && <span className="tagline">{tagline}</span>}
+          {crumbs.length === 0 && tagline && (
+            <span className="crumb">
+              <span className="crumb-sep" aria-hidden>
+                /
+              </span>
+              <span aria-current="page">{tagline}</span>
+            </span>
+          )}
         </nav>
         {actions && <div className="topbar-actions">{actions}</div>}
       </header>
-      {children}
-    </div>
+      <main className="page" id="main">
+        {children}
+      </main>
+    </>
   );
 }

@@ -1,4 +1,5 @@
 import { useState, type ReactNode } from 'react';
+import { Icon } from './Icon.js';
 
 export interface Column<T> {
   key: string;
@@ -53,7 +54,13 @@ export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel }: Data
                   {c.sortable ? (
                     <button type="button" className="th-sort" onClick={() => toggleSort(c.key)}>
                       {c.header}
-                      {active && <span aria-hidden="true">{sort.dir === 'asc' ? ' ▲' : ' ▼'}</span>}
+                      {active && (
+                        <Icon
+                          className="sort-arrow"
+                          name={sort.dir === 'asc' ? 'caretUp' : 'caretDown'}
+                          size={9}
+                        />
+                      )}
                     </button>
                   ) : (
                     c.header

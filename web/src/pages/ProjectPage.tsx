@@ -1,9 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
 import { listSessions, deleteProject, deleteSession } from '../api.js';
 import { fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Shell } from '../components/Shell.js';
+import { Kpi, KpiSkeleton } from '../components/Kpi.js';
+import { Icon } from '../components/Icon.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { ViewToggle } from '../components/ViewToggle.js';
 import { SessionList } from '../components/SessionList.js';
@@ -14,8 +16,11 @@ const LIMIT = 50;
 export function ProjectPage() {
   const { author = '', project = '' } = useParams<{ author: string; project: string }>();
   const nav = useNavigate();
-  const [layoutRaw, setLayout] = usePref('layout', 'cards');
-  const layout = layoutRaw === 'table' ? 'table' : 'cards';
+  // 'table' default matches Overview and User — usePref stores `layout` under one shared
+  // localStorage key, so differing defaults per page meant whichever page you touched last
+  // silently changed the others.
+  const [layoutRaw, setLayout] = usePref('layout', 'table');
+  const layout = layoutRaw === 'cards' ? 'cards' : 'table';
 
   // Paginated, project-scoped fetch — accumulates across "Load more" clicks. Resets whenever
   // author/project changes.
@@ -24,6 +29,7 @@ export function ProjectPage() {
   const [done, setDone] = useState(false);
   const [err, setErr] = useState('');
   const [loaded, setLoaded] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
 
   useEffect(() => {
     setSessions([]);
@@ -34,6 +40,7 @@ export function ProjectPage() {
 
   useEffect(() => {
     const ac = new AbortController();
+    setLoadingMore(true);
     listSessions({ author, project, limit: LIMIT, offset }, ac.signal)
       .then((rows) => {
         setSessions((prev) => (offset === 0 ? rows : [...prev, ...rows]));
@@ -42,6 +49,9 @@ export function ProjectPage() {
       })
       .catch((e) => {
         if (!ac.signal.aborted) setErr(String(e));
+      })
+      .finally(() => {
+        if (!ac.signal.aborted) setLoadingMore(false);
       });
     return () => ac.abort();
   }, [author, project, offset]);
@@ -54,7 +64,28 @@ export function ProjectPage() {
     const messages = sessions.reduce((n, s) => n + msgCount(s.stats), 0);
     const tokens = sessions.reduce((n, s) => n + s.stats.totalTokens, 0);
     const cost = sessions.reduce((n, s) => n + (s.stats.estimatedCostUsd ?? 0), 0);
-    return { turns, messages, tokens, cost, count: sessions.length };
+
+    // Side-panel material: what this project actually exercised. Counted over the loaded page,
+    // same caveat as the totals above.
+    const skills = new Map<string, number>();
+    const subagents = new Map<string, number>();
+    const models = new Map<string, number>();
+    for (const s of sessions) {
+      s.stats.skills.forEach((k) => skills.set(k, (skills.get(k) ?? 0) + 1));
+      s.stats.subagents.forEach((k) => subagents.set(k, (subagents.get(k) ?? 0) + 1));
+      s.stats.models.forEach((m) => models.set(m, (models.get(m) ?? 0) + 1));
+    }
+    const bycount = (a: [string, number], b: [string, number]) => b[1] - a[1];
+    return {
+      turns,
+      messages,
+      tokens,
+      cost,
+      count: sessions.length,
+      skills: [...skills.entries()].sort(bycount),
+      subagents: [...subagents.entries()].sort(bycount),
+      models: [...models.entries()].sort(bycount),
+    };
   }, [sessions]);
 
   const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
@@ -79,91 +110,156 @@ export function ProjectPage() {
       actions={
         sessions.length > 0 ? (
           <button className="chip danger" onClick={() => setDeleteProjectOpen(true)}>
+            <Icon name="trash" size={13} />
             Delete project
           </button>
         ) : undefined
       }
     >
-      <div className="layout">
-        <aside className="sidebar">
-          <div className="panel">
-            <div className="entity-head" style={{ marginBottom: 4 }}>
-              <span className="folder-badge avatar-lg" aria-hidden style={{ fontSize: 20 }}>
-                ▸
-              </span>
-              <div>
-                <h4
-                  className="mono"
-                  style={{ margin: 0, color: 'var(--text)', textTransform: 'none', fontSize: 14 }}
-                >
-                  {project}
-                </h4>
-                <span className="muted">by {author}</span>
-              </div>
-            </div>
+      <div className="page-head">
+        <div className="entity-head">
+          <span className="folder-badge avatar-lg" aria-hidden>
+            <Icon name="folder" size={20} />
+          </span>
+          <div style={{ minWidth: 0 }}>
+            <h1 className="mono">{project}</h1>
+            <p className="entity-sub">
+              by <Link to={`/u/${encodeURIComponent(author)}`}>{author}</Link>
+            </p>
           </div>
-          <div className="panel totals">
-            <div className="total">
-              <div className="total-value">{summary.count}</div>
-              <div className="total-label">sessions</div>
-            </div>
-            <div className="total" title={`${summary.turns.toLocaleString()} Claude turns`}>
-              <div className="total-value">{summary.messages.toLocaleString()}</div>
-              <div className="total-label">messages</div>
-            </div>
-            <div className="total">
-              <div className="total-value">{fmtTokens(summary.tokens)}</div>
-              <div className="total-label">tokens</div>
-            </div>
-            <div className="total">
-              <div className="total-value">{fmtCost(summary.cost)}</div>
-              <div className="total-label">cost</div>
-            </div>
-          </div>
-        </aside>
+        </div>
+        <div className="page-head-actions">
+          <ViewToggle
+            label="Layout"
+            value={layout}
+            onChange={setLayout}
+            options={[
+              { value: 'table', label: 'Table' },
+              { value: 'cards', label: 'Cards' },
+            ]}
+          />
+        </div>
+      </div>
 
-        <main className="content">
-          <div className="content-head">
-            <h1>Sessions</h1>
-            <p className="lede">Every session {author} ran in this project.</p>
-          </div>
-
-          <div className="controls">
-            <ViewToggle
-              label="Layout"
-              value={layout}
-              onChange={setLayout}
-              options={[
-                { value: 'cards', label: 'Cards' },
-                { value: 'table', label: 'Table' },
-              ]}
+      <div className="kpi-row">
+        {!loaded ? (
+          <>
+            <KpiSkeleton label="Sessions" />
+            <KpiSkeleton label="Messages" />
+            <KpiSkeleton label="Tokens" />
+            <KpiSkeleton label="Cost" />
+          </>
+        ) : (
+          <>
+            <Kpi label="Sessions" icon="message" value={String(summary.count)} foot={done ? 'all loaded' : 'loaded so far'} primary />
+            <Kpi
+              label="Messages"
+              icon="person"
+              value={summary.messages.toLocaleString()}
+              foot={`${summary.turns.toLocaleString()} Claude turns back`}
             />
+            <Kpi label="Tokens" icon="layers" value={fmtTokens(summary.tokens)} foot="input + output + cache" />
+            <Kpi label="Cost" icon="coin" value={fmtCost(summary.cost)} foot="from the transcript" />
+          </>
+        )}
+      </div>
+
+      {/* Same bento as UserPage — sessions in the wide cell, a narrow stack of what the project
+       * exercised beside it. Before this, Project was the one page with no bento: a bare
+       * auto-fill card grid that sharded two sessions across four tracks and left the rest of
+       * the viewport empty. */}
+      <div className="bento">
+        <section className="col-9">
+          <div className="panel-head">
+            <div>
+              <h4>Sessions</h4>
+              <p className="panel-sub">Every session {author} ran in this project, newest first.</p>
+            </div>
           </div>
 
           {err ? (
             <div className="empty">
+              <Icon name="cpu" size={22} className="empty-icon" />
               <h3>Can’t reach the server</h3>
               <p className="muted">{err}</p>
             </div>
           ) : !loaded ? (
-            <div className="empty">Loading…</div>
+            <div className="skel" style={{ height: 300, borderRadius: 'var(--r-lg)' }} />
           ) : sessions.length === 0 ? (
             <div className="empty">
+              <Icon name="message" size={22} className="empty-icon" />
               <h3>No sessions in this project</h3>
+              <p>
+                Either nothing has run here yet, or the project was opted out with{' '}
+                <code>/claudelens:untrack-project</code>.
+              </p>
             </div>
           ) : (
             <>
               <SessionList sessions={sessions} layout={layout} onDelete={(s) => setPendingSession(s)} />
               {!done && (
-                <div style={{ textAlign: 'center', marginTop: 16 }}>
-                  <button type="button" className="chip" onClick={() => setOffset((o) => o + LIMIT)}>
-                    Load more
+                <div className="load-more">
+                  <button
+                    type="button"
+                    className="chip"
+                    disabled={loadingMore}
+                    onClick={() => setOffset((o) => o + LIMIT)}
+                  >
+                    {loadingMore ? 'Loading…' : 'Load more'}
                   </button>
                 </div>
               )}
             </>
           )}
-        </main>
+        </section>
+
+        <div className="col-3 stack">
+          <section className="panel">
+            <div className="panel-head tight">
+              <h4>Skills used here</h4>
+            </div>
+            {summary.skills.length === 0 && summary.subagents.length === 0 ? (
+              <p className="muted">No skills or subagents in these sessions.</p>
+            ) : (
+              <div className="card-skills">
+                {summary.skills.map(([sk, n]) => (
+                  <span key={sk} className="pill skill">
+                    /{sk} <span className="tag-count">{n}</span>
+                  </span>
+                ))}
+                {summary.subagents.map(([a, n]) => (
+                  <span key={a} className="pill agent">
+                    @{a} <span className="tag-count">{n}</span>
+                  </span>
+                ))}
+              </div>
+            )}
+          </section>
+
+          <section className="panel">
+            <div className="panel-head tight">
+              <h4>Models</h4>
+            </div>
+            {summary.models.length === 0 ? (
+              <p className="muted">No model usage recorded.</p>
+            ) : (
+              <ul className="barlist">
+                {summary.models.map(([m, n]) => (
+                  <li key={m}>
+                    <span className="bar-label tool">{m}</span>
+                    <span className="bar-track">
+                      <span
+                        className="bar-fill"
+                        style={{ width: `${(n / Math.max(1, summary.count)) * 100}%` }}
+                      />
+                    </span>
+                    <span className="bar-count">{n}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </section>
+        </div>
       </div>
 
       <ConfirmDialog

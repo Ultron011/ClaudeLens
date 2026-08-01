@@ -32,40 +32,32 @@ export function modalMode(turns: Turn[]): PermissionMode | undefined {
   return best;
 }
 
-/** Session-level mode pills: an accent "auto mode" pill when it was ever used, plus a neutral
- *  pill per other observed mode. Renders nothing for the common case (one default mode, never
- *  auto) — no point pilling the obvious. */
-export function ModeBadges({
-  modes = [],
-  usedAutoMode,
-}: {
-  modes?: PermissionMode[];
-  usedAutoMode?: boolean;
-}) {
-  const others = modes.filter((m) => m !== 'auto');
-  if (!usedAutoMode && others.length === 0) return null;
-  return (
-    <div className="session-pills">
-      {usedAutoMode && <span className="pill mode-auto">⚡ auto mode</span>}
-      {others.map((m) => (
-        <span key={m} className={`pill ${modeClass(m)}`}>
-          {m}
-        </span>
-      ))}
-    </div>
-  );
-}
+/* A session-level `ModeBadges` component lived here, rendering an "auto mode" pill plus a pill per
+ * observed mode. It was deleted once mode was removed from both the session header and the session
+ * list: nothing rendered it, and `stats.permissionModes` / `stats.usedAutoMode` are still on the
+ * API if it's ever wanted back (see git history). Mode *changes* are still surfaced inline by
+ * `TurnModeBadge` below, which is the signal that actually earned its space. */
 
-/** Per-turn mode badge, rendered in the existing `.turn-role` gutter next to the `subagent`
- *  badge. Shown only when it differs from the session's modal mode — otherwise every turn
- *  carries an identical badge, which is noise, not signal. */
+/** Per-turn mode badge — a **transition marker**, not a per-turn label.
+ *
+ * It renders only when this turn's mode differs from the previous turn's, i.e. at the point the
+ * mode actually changed; from there the reader carries it forward. Comparing against the session's
+ * *modal* mode instead (the previous behaviour) badges every turn in the minority mode, which on a
+ * real 388-turn session with two modes meant a badge on roughly half the bubbles — the exact noise
+ * this badge exists to avoid. `prev === undefined` is the first turn, which only badges if it
+ * differs from the session default. */
 export function TurnModeBadge({
   mode,
+  prev,
   modal,
 }: {
   mode?: PermissionMode;
+  /** The previous turn's mode. Omit only when there is no previous turn. */
+  prev?: PermissionMode;
   modal?: PermissionMode;
 }) {
-  if (!mode || mode === modal) return null;
+  if (!mode) return null;
+  const reference = prev ?? modal;
+  if (mode === reference) return null;
   return <span className={`badge ${modeClass(mode)}`}>{mode}</span>;
 }

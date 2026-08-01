@@ -5,9 +5,10 @@ import { getSession, patchSession, deleteSession, type SessionDetail } from '../
 import { fmtDuration, fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Shell, type Crumb } from '../components/Shell.js';
 import { Metric } from '../components/Stat.js';
+import { Icon } from '../components/Icon.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { AccountLine } from '../components/AccountLine.js';
-import { ModeBadges, TurnModeBadge, modalMode } from '../components/ModeBadges.js';
+import { TurnModeBadge, modalMode } from '../components/ModeBadges.js';
 import { useFetch } from '../useFetch.js';
 
 export function SessionPage() {
@@ -39,17 +40,23 @@ export function SessionPage() {
 
   if (err)
     return (
-      <Shell>
+      <Shell crumbs={[{ label: 'Session' }]}>
         <div className="empty">
-          <h3>Couldn’t load session</h3>
+          <Icon name="cpu" size={22} className="empty-icon" />
+          <h3>Couldn’t load this session</h3>
           <p className="muted">{err}</p>
         </div>
       </Shell>
     );
   if (!s)
     return (
-      <Shell>
-        <div className="empty">Loading…</div>
+      <Shell crumbs={[{ label: 'Session' }]}>
+        <div className="session-wrap" aria-busy="true">
+          <div className="skel skel-line" style={{ width: '55%', height: 22 }} />
+          <div className="skel skel-line" style={{ width: '30%', marginTop: 12 }} />
+          <div className="skel" style={{ height: 76, borderRadius: 'var(--r-lg)', marginTop: 20 }} />
+          <div className="skel" style={{ height: 300, borderRadius: 'var(--r-lg)', marginTop: 20 }} />
+        </div>
       </Shell>
     );
 
@@ -70,10 +77,16 @@ export function SessionPage() {
       crumbs={crumbs}
       actions={
         <>
-          <button className={s.featured ? 'chip on' : 'chip'} onClick={toggleFeatured}>
-            ★ {s.featured ? 'Featured' : 'Feature'}
+          <button
+            className={s.featured ? 'chip on' : 'chip'}
+            onClick={toggleFeatured}
+            aria-pressed={s.featured}
+          >
+            <Icon name="star" size={13} filled={s.featured} />
+            {s.featured ? 'Featured' : 'Feature'}
           </button>
           <button className="chip danger" onClick={() => setPendingDelete(true)}>
+            <Icon name="trash" size={13} />
             Delete
           </button>
         </>
@@ -94,7 +107,11 @@ export function SessionPage() {
             {s.gitBranch && (
               <>
                 {' '}
-                · <code>{s.gitBranch}</code>
+                ·{' '}
+                <span className="inline-icon">
+                  <Icon name="branch" size={12} />
+                  <code>{s.gitBranch}</code>
+                </span>
               </>
             )}
             <AccountLine email={s.accountEmail} orgName={s.orgName} />
@@ -114,38 +131,54 @@ export function SessionPage() {
             <Metric label="cost" value={fmtCost(st.estimatedCostUsd)} />
             <Metric label="models" value={st.models.join(', ') || '—'} />
           </div>
-          <ModeBadges modes={st.permissionModes} usedAutoMode={st.usedAutoMode} />
-
-          {(st.skills.length > 0 || st.subagents.length > 0) && (
-            <div className="session-pills">
-              {st.skills.map((sk) => (
-                <span key={sk} className="pill skill">
-                  /{sk}
-                </span>
-              ))}
-              {st.subagents.map((a) => (
-                <span key={a} className="pill agent">
-                  @{a}
-                </span>
-              ))}
-            </div>
-          )}
-          {Object.keys(st.toolUsage).length > 0 && (
-            <div className="session-pills">
-              {Object.entries(st.toolUsage)
-                .sort((a, b) => b[1] - a[1])
-                .map(([t, n]) => (
-                  <span key={t} className="pill tool">
-                    {t} <span className="tag-count">{n}</span>
-                  </span>
-                ))}
-            </div>
-          )}
+          {/* One labelled block per kind, on a single spacing rhythm. Previously these were three
+            * bare pill rows with different gaps stacked under the stats, which read as ragged and
+            * left the reader to guess what each row was. A row is omitted entirely when empty
+            * rather than rendering an orphan label. */}
+          <dl className="session-facts">
+            {(st.skills.length > 0 || st.subagents.length > 0) && (
+              <div className="session-fact">
+                <dt>Skills &amp; subagents</dt>
+                <dd>
+                  {st.skills.map((sk) => (
+                    <span key={sk} className="pill skill">
+                      /{sk}
+                    </span>
+                  ))}
+                  {st.subagents.map((a) => (
+                    <span key={a} className="pill agent">
+                      @{a}
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            )}
+            {Object.keys(st.toolUsage).length > 0 && (
+              <div className="session-fact">
+                <dt>Tools</dt>
+                <dd>
+                  {Object.entries(st.toolUsage)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([t, n]) => (
+                      <span key={t} className="pill">
+                        {t} <span className="tag-count">{n}</span>
+                      </span>
+                    ))}
+                </dd>
+              </div>
+            )}
+          </dl>
         </div>
 
         <div className="transcript">
           {s.turns.map((t, i) => (
-            <TurnView key={i} turn={t} modal={modal} />
+            <TurnView
+              key={i}
+              turn={t}
+              modal={modal}
+              prevMode={i > 0 ? s.turns[i - 1].permissionMode : undefined}
+              author={s.author}
+            />
           ))}
         </div>
       </div>
@@ -161,26 +194,56 @@ export function SessionPage() {
   );
 }
 
-function TurnView({ turn, modal }: { turn: Turn; modal?: Turn['permissionMode'] }) {
+/** One transcript turn.
+ *
+ * The speaker is named in a header row — avatar chip + name — rather than in a narrow uppercase
+ * gutter beside the text. That's the same person-cell vocabulary the People table and the card
+ * headers use, so the transcript reads as part of the same product instead of as a log dump. The
+ * user's real display name appears here too; "User" told the reader nothing they didn't know. */
+function TurnView({
+  turn,
+  modal,
+  prevMode,
+  author,
+}: {
+  turn: Turn;
+  modal?: Turn['permissionMode'];
+  prevMode?: Turn['permissionMode'];
+  author: string;
+}) {
   const [showThinking, setShowThinking] = useState(false);
   const isUser = turn.role === 'user';
+  // Icon, not a name: the speaker alternates side and colour, so a repeated name on every turn is
+  // noise. The name still ships to assistive tech below, where alignment and hue mean nothing.
+  const speaker = isUser ? author : turn.isSidechain ? 'Claude subagent' : 'Claude';
   return (
-    <div className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}`}>
-      <div className="turn-role">
-        {isUser ? 'User' : 'Claude'}
-        {turn.isSidechain && <span className="badge">subagent</span>}
-        <TurnModeBadge mode={turn.permissionMode} modal={modal} />
-      </div>
-      <div className="turn-body">
+    <article className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}`}>
+      <span className="turn-avatar" aria-hidden>
+        <Icon name={isUser ? 'person' : turn.isSidechain ? 'people' : 'lens'} size={14} />
+      </span>
+      <div className="turn-bubble">
+        <span className="sr-only">{speaker}:</span>
+        {(turn.isSidechain ||
+          (turn.permissionMode && turn.permissionMode !== (prevMode ?? modal))) && (
+          <div className="turn-meta">
+            {turn.isSidechain && <span className="turn-tag">subagent</span>}
+            <TurnModeBadge mode={turn.permissionMode} prev={prevMode} modal={modal} />
+          </div>
+        )}
         {turn.thinking && (
           <div className="thinking">
-            <button className="thinking-toggle" onClick={() => setShowThinking((v) => !v)}>
-              {showThinking ? '▾' : '▸'} thinking
+            <button
+              className="thinking-toggle inline-icon"
+              onClick={() => setShowThinking((v) => !v)}
+              aria-expanded={showThinking}
+            >
+              <Icon name={showThinking ? 'chevronDown' : 'chevronRight'} size={11} />
+              thinking
             </button>
             {showThinking && <pre className="thinking-text">{turn.thinking}</pre>}
           </div>
         )}
-        {turn.text && <div className="turn-text">{turn.text}</div>}
+        {turn.text && <TurnText text={turn.text} />}
         {turn.toolCalls.length > 0 && (
           <div className="tool-calls">
             {turn.toolCalls.map((tc, i) => (
@@ -189,6 +252,45 @@ function TurnView({ turn, modal }: { turn: Turn; modal?: Turn['permissionMode'] 
           </div>
         )}
       </div>
+    </article>
+  );
+}
+
+/** Transcript body text.
+ *
+ * Deliberately NOT a markdown renderer — `web` has a 4-runtime-dep budget and a parser is not
+ * worth one. Fenced code blocks are the single construct that actively hurts legibility when
+ * shown raw (a transcript is mostly prose *about* code, and the fences swallow whole screens),
+ * so only they are handled: split on ``` and alternate prose / <pre>. Odd-indexed segments are
+ * inside a fence. An unterminated fence simply leaves its tail as a code block, which is the
+ * same thing every markdown renderer does. Inline emphasis is left as written. */
+function TurnText({ text }: { text: string }) {
+  if (!text.includes('```')) return <div className="turn-text">{text}</div>;
+
+  const parts = text.split('```');
+  return (
+    <div className="turn-text">
+      {parts.map((part, i) => {
+        if (i % 2 === 0) {
+          // The blank lines that separated the prose from its fence are now doing nothing but
+          // padding, because the <pre> brings its own margin. Trim them at each seam, but only
+          // at a seam — interior blank lines are the author's paragraph breaks.
+          let prose = part;
+          if (i > 0) prose = prose.replace(/^\n+/, '');
+          if (i < parts.length - 1) prose = prose.replace(/\n+$/, '');
+          return prose ? <span key={i}>{prose}</span> : null;
+        }
+        // First line of a fenced block is the language tag, not content.
+        const nl = part.indexOf('\n');
+        const lang = nl === -1 ? '' : part.slice(0, nl).trim();
+        const code = nl === -1 ? part : part.slice(nl + 1);
+        return (
+          <pre className="turn-code" key={i}>
+            {lang && <span className="turn-code-lang">{lang}</span>}
+            <code>{code.replace(/\n$/, '')}</code>
+          </pre>
+        );
+      })}
     </div>
   );
 }

@@ -1,5 +1,8 @@
+<!-- Same mark as <Logo/> in web/src/components/Icon.tsx — keep the two in step.
+     Lens ring + one filled quadrant: an aperture, and a slice of a ring chart. -->
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
-  <rect width="32" height="32" rx="7" fill="#0d0f13"/>
-  <circle cx="16" cy="16" r="8.5" fill="none" stroke="#d68a4c" stroke-width="2"/>
-  <path d="M16 7.5 a8.5 8.5 0 0 1 0 17 z" fill="#d68a4c"/>
+  <rect width="32" height="32" rx="8" fill="#ffffff"/>
+  <circle cx="16" cy="16" r="9.5" fill="none" stroke="#14181a" stroke-width="2.4"/>
+  <path d="M16 9.5A6.5 6.5 0 0 1 22.5 16H16z" fill="#157551"/>
+  <circle cx="16" cy="16" r="2" fill="#157551"/>
 </svg>

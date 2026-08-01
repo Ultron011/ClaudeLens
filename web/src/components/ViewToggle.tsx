@@ -1,5 +1,7 @@
-/** 2+ button segmented control, built on the existing `.chip` style. Used for both the
- *  card/table layout switch and the grouped/flat view switch. */
+/** 2+ button segmented control — one inset track, the active thumb is the raised surface.
+ *  Used for the card/table layout switch, the grouped/flat view switch, and the analytics range.
+ *  `aria-pressed` (not `.on`) is what drives the active styling, so the visual state and the
+ *  accessibility state can never drift apart. */
 export function ViewToggle<T extends string>({
   value,
   options,
@@ -12,12 +14,11 @@ export function ViewToggle<T extends string>({
   label: string;
 }) {
   return (
-    <div className="view-toggle" role="group" aria-label={label}>
+    <div className="segmented" role="group" aria-label={label}>
       {options.map((o) => (
         <button
           key={o.value}
           type="button"
-          className={o.value === value ? 'chip on' : 'chip'}
           aria-pressed={o.value === value}
           onClick={() => onChange(o.value)}
         >

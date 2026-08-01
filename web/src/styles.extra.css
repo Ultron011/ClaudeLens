@@ -1,46 +1,50 @@
-/* Appended after styles.css. Dialog styles for now — T5 (tables) and T7 (charts) add their own
- * sections below, keeping one extra stylesheet instead of one per feature. */
+/* Feature-scoped rules, imported after styles.css (main.tsx). One extra stylesheet rather than
+ * one per feature: dialog, tables, charts, donut, transcript extras. */
 
 /* ---- ConfirmDialog ---- */
+/* --bg-card, not --bg-elev: the dialog is a raised surface, and --bg-elev is the recessed grey
+ * used for inset furniture. */
 .confirm-dialog {
-  background: var(--bg-elev);
+  background: var(--bg-card);
   color: var(--text);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 20px;
+  border-radius: var(--r-lg);
+  padding: var(--s5);
   max-width: 420px;
   width: calc(100vw - 40px);
+  box-shadow: var(--shadow-lg);
 }
 .confirm-dialog::backdrop {
-  background: rgba(0, 0, 0, 0.6);
-  backdrop-filter: blur(2px);
+  background: rgba(22, 38, 30, 0.34);
+  backdrop-filter: blur(3px);
 }
-.confirm-dialog h3 { margin: 0 0 8px; font-size: 16px; }
-.confirm-body { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; }
+.confirm-dialog h3 { margin: 0 0 var(--s2); font-size: var(--fs-lg); font-weight: 620; }
+.confirm-body { color: var(--text-dim); font-size: var(--fs-md); line-height: 1.55; margin: 0 0 var(--s4); }
 .confirm-type {
   display: flex; flex-direction: column; gap: 6px;
-  font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px;
+  font-size: var(--fs-sm); color: var(--text-dim); margin-bottom: var(--s4);
 }
 .confirm-type input {
-  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
-  border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 13px;
+  background: var(--bg-sunken); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--r-md); padding: 8px 10px; font-family: var(--mono); font-size: var(--fs-md);
+  transition: border-color var(--t-fast) var(--ease);
 }
-.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.confirm-type input::placeholder { color: var(--text-faint); }
+.confirm-type input:focus-visible { border-color: var(--accent); outline: none; }
+.confirm-actions { display: flex; justify-content: flex-end; gap: var(--s3); }
 .confirm-actions .chip.danger:disabled { opacity: 0.4; cursor: not-allowed; }
+.confirm-actions .chip.danger:not(:disabled) {
+  background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  color: var(--danger);
+}
 
 /* ---- tables ---- */
-.sr-only {
-  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
-  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
-}
-
-.view-toggle { display: flex; gap: 6px; }
+.view-toggle { display: flex; }
 
 /* Grid items default to min-width:auto (their content's max-content size), so a wide table
- * inside `.content` pushes the `.layout` grid track — and the page body — wider than the
- * viewport instead of scrolling internally. min-width:0 lets `.table-scroll`'s own overflow-x
- * do the job. */
-.layout > .content { min-width: 0; }
+ * inside the page grid would push the track — and the body — wider than the viewport instead of
+ * scrolling internally. min-width:0 lets .table-scroll's own overflow-x do the job. */
+.bento > *, .app-main, .page { min-width: 0; }
 
 /* No overflow-x here on purpose: any non-visible overflow on an ancestor makes it the containing
  * block for `position: sticky` descendants (CSS Overflow §3 also forces overflow-y into a real
@@ -49,36 +53,62 @@
  * div — gives the sticky <th> nothing to stick *to*: it just rides along with the page instead of
  * pinning under the topbar. So the horizontal-scroll affordance only turns on under 720px (below),
  * where a pinned first column matters more than a working sticky header on a wide desktop table. */
+/* No `overflow: hidden` here, however tempting it is for clipping the corners: a non-visible
+ * overflow makes this element the containing block for its sticky <thead>, which then sticks
+ * 60px (--topbar-h) below the *table's* top edge and paints over the first body row instead of
+ * pinning under the page topbar. Corners are rounded on the corner cells below instead. */
 .table-scroll {
-  border: 1px solid var(--border-soft); border-radius: var(--radius);
+  border: 1px solid var(--border-soft); border-radius: var(--r-lg);
+  background: var(--bg-card);
 }
 /* border-collapse: collapse breaks `position: sticky` on <th> in every current browser engine
  * (the collapsed border box loses its own layout box, so the sticky row and the first tbody row
  * render on top of each other). border-spacing: 0 + row-level borders gets the hairline look back
  * without the bug. */
-.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: var(--fs-md); }
 .data-table thead th {
-  position: sticky; top: var(--topbar-h); z-index: 1;
-  background: var(--bg-elev); color: var(--text-dim);
-  text-align: left; font-weight: 600; font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: 0.04em; padding: 10px 14px; border-bottom: 1px solid var(--border-soft);
+  position: sticky; top: var(--topbar-h); z-index: var(--z-sticky);
+  background: var(--bg-elev); color: var(--text-faint);
+  text-align: left; font-weight: 600; font-size: var(--fs-xs); text-transform: uppercase;
+  letter-spacing: 0.06em; padding: 10px var(--s4); border-bottom: 1px solid var(--border-soft);
   white-space: nowrap;
 }
 .data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.data-table td { padding: 10px 14px; border-top: 1px solid var(--border-soft); vertical-align: middle; }
-.data-table tbody tr:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.data-table td {
+  padding: 11px var(--s4); border-top: 1px solid var(--border-soft); vertical-align: middle;
+}
+.data-table tbody tr { transition: background var(--t-fast) var(--ease); }
+.data-table tbody tr:hover { background: var(--bg-raised); }
+.data-table tbody tr:first-child td { border-top: none; }
+/* Corner rounding without clipping the sticky header's containing block (see .table-scroll). */
+.data-table thead tr:first-child th:first-child { border-top-left-radius: var(--r-lg); }
+.data-table thead tr:first-child th:last-child { border-top-right-radius: var(--r-lg); }
+.data-table tbody tr:last-child td:first-child { border-bottom-left-radius: var(--r-lg); }
+.data-table tbody tr:last-child td:last-child { border-bottom-right-radius: var(--r-lg); }
+.data-table a { color: var(--text); font-weight: 500; transition: color var(--t-fast) var(--ease); }
+.data-table a:hover { color: var(--accent); }
 .th-sort {
   background: none; border: none; color: inherit; font: inherit; text-transform: inherit;
-  letter-spacing: inherit; padding: 0; cursor: pointer; display: inline-flex; gap: 4px; align-items: center;
+  letter-spacing: inherit; padding: 0; cursor: pointer;
+  display: inline-flex; gap: 4px; align-items: center;
+  transition: color var(--t-fast) var(--ease);
 }
-.th-sort:hover { color: var(--text); }
+.th-sort:hover { color: var(--text-dim); }
+.th-sort .sort-arrow { color: var(--accent); font-size: var(--fs-2xs); }
+
+/* The delete column is an icon button that only resolves on row hover/focus — present for touch,
+ * quiet on a dense desktop table. */
+.data-table .row-action {
+  opacity: 0; transition: opacity var(--t-fast) var(--ease);
+  padding: 4px; line-height: 0;
+}
+.data-table tbody tr:hover .row-action,
+.data-table tbody tr:focus-within .row-action { opacity: 1; }
+@media (hover: none) { .data-table .row-action { opacity: 1; } }
 
 /* Under 720px: horizontal scroll turns on (trading the sticky-header/page-scroll behavior above
  * for a usable narrow-viewport table — see the .table-scroll comment) and the first column pins
- * so the scroll stays orientable.
- * ponytail: a table that's wider than the viewport at ≥720px will still bleed past .content
- * (no overflow-x there — see above). Not fixed here: it needs either a max-width per column or
- * accepting the sticky-header trade-off below 720px too. Revisit if a real dataset hits it. */
+ * so the scroll stays orientable. */
 @media (max-width: 720px) {
   .table-scroll { overflow-x: auto; }
   .data-table th:first-child, .data-table td:first-child {
@@ -88,34 +118,83 @@
 }
 
 /* ---- charts ---- */
-.analytics-kpis { border-top: none; padding: 0; margin-bottom: 20px; gap: 28px; }
-.chart-panel { margin-bottom: 16px; }
-.chart-panel h4 { margin-bottom: 8px; }
-
-.chart { position: relative; }
-.chart svg { display: block; }
-.chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.chart { position: relative; width: 100%; }
+/* `overflow: hidden` + `max-width` are the belt and braces for the measured viewBox: between a
+ * container resize and the ResizeObserver callback there is one frame at the old width, and
+ * without these the drawing paints past the panel's border during that frame. */
+.chart svg { display: block; max-width: 100%; overflow: hidden; }
+.chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; border-radius: var(--r-sm); }
+.chart rect { transition: opacity var(--t-fast) var(--ease); }
 
 .chart-readout {
-  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
-  font-size: 12.5px; color: var(--text-dim); margin-top: 6px;
+  display: flex; flex-wrap: wrap; gap: var(--s4); align-items: center;
+  font-size: var(--fs-sm); color: var(--text-dim); margin-top: var(--s2);
+  min-height: 19px;
 }
-.chart-readout strong { color: var(--text); font-weight: 600; }
+.chart-readout strong { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
 .chart-readout i, .chart-legend i, .model-dot {
-  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle;
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+  margin-right: 6px; vertical-align: middle; flex-shrink: 0;
+}
+.chart-legend {
+  display: flex; flex-wrap: wrap; gap: var(--s4); margin-top: var(--s2);
+  font-size: var(--fs-sm); color: var(--text-dim);
 }
 
-.chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-dim); }
+/* Hint that the chart is keyboard-drivable — only shown once it has focus, so it isn't
+ * permanent chrome on a page with four charts. */
+.chart-hint {
+  position: absolute; top: 0; right: 0; font-size: var(--fs-xs); color: var(--text-faint);
+  opacity: 0; transition: opacity var(--t-fast) var(--ease); pointer-events: none;
+}
+.chart:focus-within .chart-hint { opacity: 1; }
 
-/* Own scoped table styling — deliberately not reusing .data-table (T5's generic DataTable may
- * not exist yet when this compiles; unify later if it's worth it). */
-.chart-table-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius); }
-.chart-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+/* ---- donut ---- */
+/* The donut panel sits beside a taller chart panel in the bento, so its content centres in the
+ * leftover height rather than hugging the heading with a void underneath. */
+.panel:has(> .donut-wrap) { display: flex; flex-direction: column; }
+.donut-wrap {
+  display: flex; align-items: center; gap: var(--s6); flex-wrap: wrap;
+  flex: 1; justify-content: center;
+}
+.donut { position: relative; flex-shrink: 0; }
+.donut circle { transition: stroke-dasharray var(--t-slow) var(--ease); }
+.donut-center {
+  position: absolute; inset: 0; display: grid; place-content: center; text-align: center;
+  pointer-events: none;
+}
+.donut-center-value {
+  font-size: var(--fs-2xl); font-weight: 650; letter-spacing: -0.03em; font-variant-numeric: tabular-nums;
+}
+.donut-center-label {
+  font-size: var(--fs-2xs); color: var(--text-faint); text-transform: uppercase; letter-spacing: 0.06em;
+  margin-top: 2px;
+}
+.donut-legend {
+  list-style: none; margin: 0; padding: 0; flex: 1; min-width: 150px;
+  display: flex; flex-direction: column; gap: 7px; font-size: var(--fs-sm);
+}
+.donut-legend li { display: flex; align-items: center; gap: 2px; }
+.donut-legend-label {
+  flex: 1; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.donut-legend-value { color: var(--text); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* ---- model table (scoped, denser than .data-table, lives inside a panel) ---- */
+.chart-table-wrap { overflow-x: auto; }
+.chart-table { width: 100%; border-collapse: collapse; font-size: var(--fs-md); }
 .chart-table th {
-  text-align: left; font-weight: 600; font-size: 11.5px; text-transform: uppercase;
-  letter-spacing: 0.04em; color: var(--text-dim); padding: 10px 14px;
+  text-align: left; font-weight: 600; font-size: var(--fs-xs); text-transform: uppercase;
+  letter-spacing: 0.06em; color: var(--text-faint); padding: 8px var(--s3) 10px;
   border-bottom: 1px solid var(--border-soft); white-space: nowrap;
 }
-.chart-table td { padding: 10px 14px; border-top: 1px solid var(--border-soft); }
+.chart-table td { padding: 10px var(--s3); border-top: 1px solid var(--border-soft); }
 .chart-table th.num, .chart-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
-.chart-table tbody tr:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.chart-table tbody tr { transition: background var(--t-fast) var(--ease); }
+.chart-table tbody tr:hover { background: var(--bg-raised); }
+.chart-table th:first-child, .chart-table td:first-child { padding-left: 0; }
+.chart-table th:last-child, .chart-table td:last-child { padding-right: 0; }
+
+/* ---- misc ---- */
+.load-more { display: flex; justify-content: center; margin-top: var(--s5); }
+.inline-icon { display: inline-flex; align-items: center; gap: 5px; vertical-align: -2px; }
