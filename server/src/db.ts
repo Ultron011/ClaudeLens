@@ -34,3 +34,30 @@ CREATE INDEX IF NOT EXISTS sessions_author_idx   ON sessions (author);
 CREATE INDEX IF NOT EXISTS sessions_project_idx  ON sessions (author, project);
 CREATE INDEX IF NOT EXISTS sessions_tags_idx     ON sessions USING gin (tags);
 `;
+
+// v2: identity, auto-mode, parser version, and delete stickiness. SCHEMA above is frozen —
+// every new column lives here, added with ADD COLUMN IF NOT EXISTS so this is safe to re-run.
+export const MIGRATIONS = `
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_email        text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_display_name text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS org_name             text;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS used_auto_mode   boolean NOT NULL DEFAULT false;
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS permission_modes text[]  NOT NULL DEFAULT '{}';
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parser_version   int     NOT NULL DEFAULT 0;
+
+CREATE INDEX IF NOT EXISTS sessions_account_email_idx  ON sessions (account_email);
+CREATE INDEX IF NOT EXISTS sessions_started_idx        ON sessions (started_at DESC);
+CREATE INDEX IF NOT EXISTS sessions_author_started_idx ON sessions (author, started_at DESC);
+
+-- A delete must STICK: without this the next Stop hook re-uploads what was just deleted.
+CREATE TABLE IF NOT EXISTS deletions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  scope text NOT NULL CHECK (scope IN ('session','project')),
+  author text NOT NULL,
+  session_id text,
+  project text,
+  no_project boolean NOT NULL DEFAULT false,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  UNIQUE NULLS NOT DISTINCT (scope, author, session_id, project, no_project)
+);
+`;

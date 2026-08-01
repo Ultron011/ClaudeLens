@@ -1,3 +1,11 @@
+import type { SessionStats } from '@claudelens/shared';
+
+/** Genuine human message count — the headline metric (§10). `userMessages` is undefined on
+ *  sessions synced before this existed (`parser_version` 0-2, which stored the same idea under
+ *  the old name `userTurns`). Fall back to that, then 0 — never render NaN/undefined. */
+export const msgCount = (stats: SessionStats) =>
+  stats.userMessages ?? (stats as unknown as { userTurns?: number }).userTurns ?? 0;
+
 export const fmtCost = (n: number | string | null | undefined) => {
   const v = typeof n === 'string' ? parseFloat(n) : (n ?? 0);
   if (!v) return '$0';
@@ -12,6 +20,15 @@ export const fmtTokens = (n: number) => {
 
 export const fmtDate = (s?: string) =>
   s ? new Date(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
+
+/** `daily` keys are 'YYYY-MM-DD' UTC calendar days — parsing them with `new Date(s)` reads them
+ *  as local midnight, which is off by one day in any timezone behind UTC. Parse and render as UTC. */
+export const fmtDay = (s: string) =>
+  new Date(`${s}T00:00:00Z`).toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    timeZone: 'UTC',
+  });
 
 export const fmtDuration = (ms?: number) => {
   if (!ms || ms < 0) return '';

@@ -145,6 +145,8 @@ comes from the name you pass to `connect` (or `CLAUDELENS_NAME`, then
 | `CLAUDELENS_PORT`   | deploy  | Host port the prod container exposes (default 4000) |
 | `POSTGRES_PASSWORD` | deploy  | Password for the bundled Postgres in prod compose  |
 
+Destructive endpoints (`DELETE /api/sessions/:id`, `DELETE /api/projects`) remain unauthenticated, same as the rest of the API today — see "Configuration" for `CLAUDELENS_TOKEN`, which gates ingest only.
+
 ## Reused ideas / prior art
 
 The JSONL parsing approach follows the well-documented Claude Code session

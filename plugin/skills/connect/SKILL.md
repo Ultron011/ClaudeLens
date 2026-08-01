@@ -3,9 +3,18 @@ description: Connect ClaudeLens to your team's server (one time). After this, ev
 ---
 
 One-time setup: point ClaudeLens at the team server and set the name your
-sessions appear under on the dashboard. The user provides three things — the
-**server URL**, the **ingest token** (both from whoever hosts the server), and
-their **display name**. Read them from the user's message / `$ARGUMENTS` and run:
+sessions appear under on the dashboard.
+
+**Disclosure — tell the user this before or when you connect:** ClaudeLens
+also reads the email address of the Claude Code account you're signed in
+with (`~/.claude.json`) and sends it along with each synced session, to group
+your sessions by account on the dashboard. To opt out of sharing that email
+while still syncing transcripts, set `"shareAccount": false` in
+`~/.claude/claudelens.json`.
+
+The user provides three things — the **server URL**, the **ingest token**
+(both from whoever hosts the server), and their **display name**. Read them
+from the user's message / `$ARGUMENTS` and run:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" connect $ARGUMENTS --session "${CLAUDE_SESSION_ID}"
@@ -22,4 +31,7 @@ git/OS username, which is usually not what they want on a shared gallery.
 
 After connecting, tracking is on for every project automatically — they only act
 again to opt something OUT (`/claudelens:untrack`, `/claudelens:untrack-project`,
-`/claudelens:pause`).
+`/claudelens:pause`). The command also backs up the **current** project's past
+history (not the whole machine's, to avoid a surprise upload) and, if it finds
+other projects with history, tells you to run `/claudelens:sync-history` for
+those — relay that line too.

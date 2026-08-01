@@ -6,7 +6,8 @@
 import { readFile } from 'node:fs/promises';
 import { parseTranscript, redactDeep } from '@claudelens/shared';
 import type { IngestPayload, ParsedSession } from '@claudelens/shared';
-import { loadConfig, shouldSync, resolveName } from './config.js';
+import { loadConfig, saveConfig, shouldSync, resolveName } from './config.js';
+import { readAccount } from './account.js';
 
 interface HookInput {
   session_id?: string;
@@ -70,9 +71,10 @@ export async function runSync(): Promise<void> {
     }
   }
 
-  const payload: IngestPayload = { session, author: resolveName(cfg) };
+  const account = cfg.shareAccount === false ? undefined : await readAccount();
+  const payload: IngestPayload = { session, author: resolveName(cfg, account), account };
 
-  await fetch(`${cfg.server}/api/sessions`, {
+  const res = await fetch(`${cfg.server}/api/sessions`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -80,4 +82,20 @@ export async function runSync(): Promise<void> {
     },
     body: JSON.stringify(payload),
   });
+  if (!res.ok) return;
+
+  // A deleted session/project is tombstoned server-side; the server tells us
+  // here instead of a 4xx (fire-and-forget hook) so we stop re-uploading it.
+  const body = (await res.json().catch(() => undefined)) as
+    | { ignored?: boolean; untrack?: { sessionId?: string; cwd?: string } }
+    | undefined;
+  if (body?.ignored && body.untrack) {
+    if (body.untrack.sessionId && !cfg.ignoreSessions.includes(body.untrack.sessionId)) {
+      cfg.ignoreSessions.push(body.untrack.sessionId);
+      await saveConfig(cfg);
+    } else if (body.untrack.cwd && !cfg.ignoreProjects.includes(body.untrack.cwd)) {
+      cfg.ignoreProjects.push(body.untrack.cwd);
+      await saveConfig(cfg);
+    }
+  }
 }

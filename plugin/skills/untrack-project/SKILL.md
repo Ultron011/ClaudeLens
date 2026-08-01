@@ -16,5 +16,8 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" untrack-project "${CLAUDE_PROJE
 ```
 
 Use `--team` only if the user asks to exclude it for everyone. Sessions in this
-project stop syncing immediately. Relay the output. Undo with
-`/claudelens:track-project`.
+project stop syncing immediately. This is purely local — it stops *future*
+uploads and never deletes anything already on the server; removing past
+sessions from the dashboard is a separate, explicit delete action there. Relay
+the output. Undo with `/claudelens:track-project` (which also backs up
+whatever history built up while it was excluded).

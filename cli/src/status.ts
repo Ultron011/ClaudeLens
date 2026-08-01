@@ -3,6 +3,7 @@
 // the current project/session so the developer can see exactly what's tracked.
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { PARSER_VERSION } from '@claudelens/shared';
 import {
   loadConfig,
   isConnected,
@@ -11,6 +12,7 @@ import {
   isRepoExcluded,
   envOptedOut,
 } from './config.js';
+import { readAccount } from './account.js';
 
 export async function runStatus(): Promise<void> {
   const cfg = await loadConfig();
@@ -27,10 +29,19 @@ export async function runStatus(): Promise<void> {
   const globalOff = cfg.paused || envOptedOut();
 
   const trackingHere = !globalOff && !projOff && !repoOff;
+  const account = cfg.shareAccount === false ? undefined : await readAccount();
 
   console.log('ClaudeLens');
   console.log(`  Server    ${cfg.server}`);
-  console.log(`  Author    ${resolveName(cfg)}`);
+  console.log(`  Author    ${resolveName(cfg, account)}`);
+  if (account) {
+    console.log(`  Account   ${account.email ?? '(no email)'}${account.organizationName ? ` · ${account.organizationName}` : ''}`);
+  } else if (cfg.shareAccount === false) {
+    console.log('  Account   not shared (shareAccount: false)');
+  } else {
+    console.log('  Account   unavailable (could not read ~/.claude.json)');
+  }
+  console.log(`  Parser    v${PARSER_VERSION} (local)`);
   console.log(`  Global    ${cfg.paused ? 'PAUSED' : envOptedOut() ? 'disabled by env (DO_NOT_TRACK)' : 'on'}`);
   console.log(`  This dir  ${cwd.replace(homedir(), '~')}`);
   console.log(

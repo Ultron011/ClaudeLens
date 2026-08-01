@@ -1,15 +1,17 @@
-import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { getStats, type OrgStats, type AuthorSummary } from '../api.js';
+import { fmtCost } from '../format.js';
 import { Shell } from '../components/Shell.js';
+import { Stat } from '../components/Stat.js';
+import { ViewToggle } from '../components/ViewToggle.js';
+import { DataTable, type Column } from '../components/DataTable.js';
+import { useFetch } from '../useFetch.js';
+import { usePref } from '../usePref.js';
 
 export function OverviewPage() {
-  const [stats, setStats] = useState<OrgStats | null>(null);
-  const [err, setErr] = useState('');
-
-  useEffect(() => {
-    getStats().then(setStats).catch((e) => setErr(String(e)));
-  }, []);
+  const { data: stats, err } = useFetch<OrgStats>((signal) => getStats(signal), []);
+  const [layoutRaw, setLayout] = usePref('layout', 'cards');
+  const layout = layoutRaw === 'table' ? 'table' : 'cards';
 
   return (
     <Shell tagline="how your team works with Claude Code">
@@ -42,11 +44,28 @@ export function OverviewPage() {
               </p>
             </div>
           ) : (
-            <div className="grid">
-              {stats.authors.map((a) => (
-                <PersonCard key={a.author} a={a} />
-              ))}
-            </div>
+            <>
+              <div className="controls">
+                <ViewToggle
+                  label="Layout"
+                  value={layout}
+                  onChange={setLayout}
+                  options={[
+                    { value: 'cards', label: 'Cards' },
+                    { value: 'table', label: 'Table' },
+                  ]}
+                />
+              </div>
+              {layout === 'table' ? (
+                <PeopleTable authors={stats.authors} />
+              ) : (
+                <div className="grid">
+                  {stats.authors.map((a) => (
+                    <PersonCard key={a.author} a={a} />
+                  ))}
+                </div>
+              )}
+            </>
           )}
         </main>
       </div>
@@ -73,25 +92,90 @@ function PersonCard({ a }: { a: AuthorSummary }) {
       <div className="card-stats">
         <Stat label="projects" value={String(a.projects)} />
         <Stat label="sessions" value={String(a.sessions)} />
-        <Stat label="turns" value={a.turns?.toLocaleString() ?? '—'} accent />
+        <Stat
+          label="messages"
+          value={a.userMessages?.toLocaleString() ?? '—'}
+          accent
+          title={`${a.turns?.toLocaleString() ?? 0} Claude turns`}
+        />
+        <Stat label="cost" value={fmtCost(a.cost)} />
       </div>
     </Link>
   );
 }
 
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
+// ponytail: no delete column here — `DELETE /api/authors` is explicitly out of scope (§0), so
+// there's nothing for a per-row ⨯ to call.
+function PeopleTable({ authors }: { authors: AuthorSummary[] }) {
+  const columns: Column<AuthorSummary>[] = [
+    {
+      key: 'person',
+      header: 'Person',
+      sortable: true,
+      sortValue: (a) => a.label,
+      // Link by `author`: that's what /u/:author routes on. `label` is only for display.
+      render: (a) => <Link to={`/u/${encodeURIComponent(a.author)}`}>{a.label}</Link>,
+    },
+    {
+      key: 'account',
+      header: 'Account',
+      sortable: true,
+      sortValue: (a) => a.identity,
+      // identity is the account email when we have one, else it falls back to the author name —
+      // in which case there's no account to show.
+      render: (a) =>
+        a.identity === a.author ? (
+          '—'
+        ) : (
+          <span title={a.orgName ?? undefined}>{a.identity}</span>
+        ),
+    },
+    {
+      key: 'sessions',
+      header: 'Sessions',
+      numeric: true,
+      sortable: true,
+      sortValue: (a) => a.sessions,
+      render: (a) => a.sessions,
+    },
+    {
+      key: 'projects',
+      header: 'Projects',
+      numeric: true,
+      sortable: true,
+      sortValue: (a) => a.projects,
+      render: (a) => a.projects,
+    },
+    {
+      key: 'messages',
+      header: 'Messages',
+      numeric: true,
+      sortable: true,
+      sortValue: (a) => a.userMessages ?? 0,
+      render: (a) => (
+        <span title={`${a.turns?.toLocaleString() ?? 0} Claude turns`}>
+          {a.userMessages?.toLocaleString() ?? '—'}
+        </span>
+      ),
+    },
+    {
+      key: 'cost',
+      header: 'Cost',
+      numeric: true,
+      sortable: true,
+      sortValue: (a) => (typeof a.cost === 'string' ? parseFloat(a.cost) : a.cost ?? 0),
+      render: (a) => fmtCost(a.cost),
+    },
+  ];
   return (
-    <div className="stat">
-      <div className={accent ? 'stat-value accent' : 'stat-value'}>{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
+    <DataTable columns={columns} rows={authors} rowKey={(a) => a.author} caption="People" ariaLabel="People" />
   );
 }
 
 function StatPanel({ stats }: { stats: OrgStats | null }) {
   if (!stats) return <div className="panel">Loading stats…</div>;
   const maxSkill = Math.max(1, ...stats.skills.map((s) => s.uses));
-  const totalTurns = stats.authors.reduce((n, a) => n + (a.turns ?? 0), 0);
+  const totalMessages = stats.authors.reduce((n, a) => n + (a.userMessages ?? 0), 0);
   return (
     <>
       <div className="panel totals">
@@ -104,8 +188,8 @@ function StatPanel({ stats }: { stats: OrgStats | null }) {
           <div className="total-label">people</div>
         </div>
         <div className="total">
-          <div className="total-value">{totalTurns.toLocaleString()}</div>
-          <div className="total-label">turns</div>
+          <div className="total-value">{totalMessages.toLocaleString()}</div>
+          <div className="total-label">messages</div>
         </div>
       </div>
 

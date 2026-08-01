@@ -8,7 +8,9 @@ Read-only. Run and relay the output:
 node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" status
 ```
 
-It prints the server URL, the author name sessions are attributed to, the global
-on/paused state, whether the current directory is tracked or excluded (and why),
-any excluded projects/sessions, and server reachability. If it says "not
-connected", tell the user to run `/claudelens:connect <server-url> <token>`.
+It prints the server URL, the author name sessions are attributed to, the
+signed-in account (email + org, read from `~/.claude.json`) or why it's
+unavailable, the local parser version, the global on/paused state, whether the
+current directory is tracked or excluded (and why), any excluded
+projects/sessions, and server reachability. If it says "not connected", tell
+the user to run `/claudelens:connect <server-url> <token>`.

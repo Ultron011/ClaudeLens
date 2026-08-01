@@ -5,13 +5,17 @@ import { OverviewPage } from './pages/OverviewPage.js';
 import { UserPage } from './pages/UserPage.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { SessionPage } from './pages/SessionPage.js';
+import { AnalyticsPage } from './pages/AnalyticsPage.js';
 import './styles.css';
+import './styles.extra.css';
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <BrowserRouter>
       <Routes>
         <Route path="/" element={<OverviewPage />} />
+        <Route path="/analytics" element={<AnalyticsPage />} />
+        <Route path="/analytics/u/:author" element={<AnalyticsPage />} />
         <Route path="/u/:author" element={<UserPage />} />
         <Route path="/u/:author/:project" element={<ProjectPage />} />
         <Route path="/session/:id" element={<SessionPage />} />

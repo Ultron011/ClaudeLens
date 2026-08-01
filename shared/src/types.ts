@@ -21,6 +21,40 @@ export interface Usage {
   cache_read_input_tokens?: number;
 }
 
+/** Open-ended on purpose: the binary's enum is
+ *  ["acceptEdits","auto","bypassPermissions","default","dontAsk","plan"] but it drifts between
+ *  releases and "auto" has never appeared in a transcript we've seen. Never switch exhaustively. */
+export type PermissionMode =
+  | 'default' | 'acceptEdits' | 'auto' | 'bypassPermissions' | 'dontAsk' | 'plan' | (string & {});
+
+/** Who was signed in, read from ~/.claude.json → oauthAccount at SYNC time. Machine-global: the
+ *  account active when the hook ran, not necessarily the one that produced every turn. */
+export interface AccountIdentity {
+  email?: string;
+  displayName?: string;
+  organizationName?: string;
+}
+
+/** activeMs is attributed, not measured — see parser.ts for the method and its ceiling. */
+export interface ModelUsage {
+  turns: number;
+  totalTokens: number;
+  costUsd: number;
+  activeMs: number;
+  /** false when activeMs came from the capped-gap fallback (no turn_duration lines). */
+  measured: boolean;
+}
+
+/** One UTC calendar day of a session. Sessions span days (resumes), which is why this is
+ *  per-session rather than a GROUP BY on started_at. */
+export interface DailyStats {
+  turns: number;
+  userMessages: number;
+  totalTokens: number;
+  costUsd: number;
+  activeMs: number;
+}
+
 /** One raw JSONL line. Only the fields we care about are typed. */
 export interface RawEntry {
   type: string;
@@ -34,6 +68,14 @@ export interface RawEntry {
   model?: string;
   aiTitle?: string;
   isSidechain?: boolean;
+  subtype?: string;
+  durationMs?: number;
+  permissionMode?: PermissionMode;
+  /** Present when a user turn was injected rather than typed (e.g. `task-notification`). */
+  origin?: { kind?: string };
+  /** e.g. `typed`, `system`, `suggestion_accepted`. */
+  promptSource?: string;
+  isMeta?: boolean;
   message?: {
     role?: string;
     model?: string;
@@ -51,18 +93,23 @@ export interface Turn {
   thinking?: string; // concatenated thinking blocks
   toolCalls: ToolCall[];
   isSidechain?: boolean;
+  permissionMode?: PermissionMode;
 }
 
 export interface ToolCall {
   name: string;
-  /** For Skill/Task/Agent calls, the skill or subagent identifier if present. */
+  /** For Skill/Task/Agent calls, the skill or subagent identifier if present.
+   *  `stats.skills`/`subagents` and the live server SQL depend on this exact meaning — unchanged. */
   detail?: string;
+  /** Bounded, always-redacted one-line summary of the invocation's input. Purely additive. */
+  args?: string;
 }
 
 /** Aggregated, learning-oriented metrics for one session. */
 export interface SessionStats {
   turns: number;
-  userTurns: number;
+  /** Genuine human-typed messages — excludes system-injected/meta user turns. See parser.ts. */
+  userMessages: number;
   assistantTurns: number;
   inputTokens: number;
   outputTokens: number;
@@ -79,6 +126,15 @@ export interface SessionStats {
   subagents: string[];
   durationMs?: number;
   firstUserPrompt?: string;
+  /** every permission mode observed, in first-seen order */
+  permissionModes: PermissionMode[];
+  usedAutoMode: boolean;
+  /** model id -> usage/cost/active-time rollup */
+  modelUsage: Record<string, ModelUsage>;
+  /** UTC calendar day (YYYY-MM-DD) -> rollup for that day */
+  daily: Record<string, DailyStats>;
+  /** false when activeMs across modelUsage came from the capped-gap fallback */
+  activeMsMeasured?: boolean;
 }
 
 /** The normalized, uploadable session document. */
@@ -93,6 +149,9 @@ export interface ParsedSession {
   endedAt?: string;
   stats: SessionStats;
   turns: Turn[];
+  /** Parser code version that produced this session — the backfill ledger key so a future bump
+   *  auto-re-syncs old sessions instead of skipping them forever. */
+  parserVersion: number;
 }
 
 /** What the CLI POSTs to the server. */
@@ -102,6 +161,7 @@ export interface IngestPayload {
   authorEmail?: string;
   note?: string; // author's "why this is worth sharing"
   tags?: string[];
+  account?: AccountIdentity;
 }
 
 /** Row shape returned by the list endpoint (no full transcript). */
@@ -119,4 +179,11 @@ export interface SessionSummary {
   stats: SessionStats;
   startedAt?: string;
   createdAt: string;
+  accountEmail?: string;
+  displayName?: string;
+  orgName?: string;
+  usedAutoMode?: boolean;
+  permissionModes?: PermissionMode[];
+  parserVersion?: number;
+  endedAt?: string;
 }

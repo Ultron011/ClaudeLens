@@ -1,44 +1,76 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useNavigate, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
-import { listSessions, deleteProject } from '../api.js';
-import { fmtDate, fmtTokens } from '../format.js';
+import { listSessions, deleteProject, deleteSession } from '../api.js';
+import { fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Shell } from '../components/Shell.js';
+import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { ViewToggle } from '../components/ViewToggle.js';
+import { SessionList } from '../components/SessionList.js';
+import { usePref } from '../usePref.js';
+
+const LIMIT = 50;
 
 export function ProjectPage() {
   const { author = '', project = '' } = useParams<{ author: string; project: string }>();
-  const [rows, setRows] = useState<SessionSummary[] | null>(null);
   const nav = useNavigate();
+  const [layoutRaw, setLayout] = usePref('layout', 'cards');
+  const layout = layoutRaw === 'table' ? 'table' : 'cards';
+
+  // Paginated, project-scoped fetch — accumulates across "Load more" clicks. Resets whenever
+  // author/project changes.
+  const [sessions, setSessions] = useState<SessionSummary[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [done, setDone] = useState(false);
+  const [err, setErr] = useState('');
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    setRows(null);
-    // Fetch the author's sessions, filter to this project client-side
-    // (handles the "(no project)" bucket without null-matching gymnastics).
-    listSessions({ author }).then(setRows).catch(() => setRows([]));
-  }, [author]);
+    setSessions([]);
+    setOffset(0);
+    setDone(false);
+    setLoaded(false);
+  }, [author, project]);
 
-  const sessions = useMemo(() => {
-    if (!rows) return [];
-    return rows
-      .filter((s) => (s.project || '(no project)') === project)
-      .sort((a, b) => (b.startedAt ?? b.createdAt).localeCompare(a.startedAt ?? a.createdAt));
-  }, [rows, project]);
+  useEffect(() => {
+    const ac = new AbortController();
+    listSessions({ author, project, limit: LIMIT, offset }, ac.signal)
+      .then((rows) => {
+        setSessions((prev) => (offset === 0 ? rows : [...prev, ...rows]));
+        setDone(rows.length < LIMIT);
+        setLoaded(true);
+      })
+      .catch((e) => {
+        if (!ac.signal.aborted) setErr(String(e));
+      });
+    return () => ac.abort();
+  }, [author, project, offset]);
 
+  // ponytail: totals reflect only the sessions loaded so far, not the whole project, once
+  // "Load more" is in play. Full server-side totals would need a second endpoint — YAGNI until
+  // someone actually has >50-session projects and complains.
   const summary = useMemo(() => {
     const turns = sessions.reduce((n, s) => n + s.stats.turns, 0);
+    const messages = sessions.reduce((n, s) => n + msgCount(s.stats), 0);
     const tokens = sessions.reduce((n, s) => n + s.stats.totalTokens, 0);
-    return { turns, tokens, count: sessions.length };
+    const cost = sessions.reduce((n, s) => n + (s.stats.estimatedCostUsd ?? 0), 0);
+    return { turns, messages, tokens, cost, count: sessions.length };
   }, [sessions]);
 
-  async function removeProject() {
-    if (
-      !window.confirm(
-        `Delete ALL ${sessions.length} session(s) in “${project}” by ${author}?\n\nThis cannot be undone.`,
-      )
-    )
-      return;
+  const [deleteProjectOpen, setDeleteProjectOpen] = useState(false);
+  const [pendingSession, setPendingSession] = useState<SessionSummary | null>(null);
+
+  async function confirmDeleteProject() {
     await deleteProject(author, project);
-    nav(`/u/${encodeURIComponent(author)}`);
+    setDeleteProjectOpen(false);
+    nav(`/u/${encodeURIComponent(author)}`, { replace: true });
+  }
+
+  async function confirmDeleteSession() {
+    if (!pendingSession) return;
+    await deleteSession(pendingSession.id);
+    setSessions((prev) => prev.filter((s) => s.id !== pendingSession.id));
+    setPendingSession(null);
   }
 
   return (
@@ -46,7 +78,7 @@ export function ProjectPage() {
       crumbs={[{ label: author, to: `/u/${encodeURIComponent(author)}` }, { label: project }]}
       actions={
         sessions.length > 0 ? (
-          <button className="chip danger" onClick={removeProject}>
+          <button className="chip danger" onClick={() => setDeleteProjectOpen(true)}>
             Delete project
           </button>
         ) : undefined
@@ -75,13 +107,17 @@ export function ProjectPage() {
               <div className="total-value">{summary.count}</div>
               <div className="total-label">sessions</div>
             </div>
-            <div className="total">
-              <div className="total-value">{summary.turns.toLocaleString()}</div>
-              <div className="total-label">turns</div>
+            <div className="total" title={`${summary.turns.toLocaleString()} Claude turns`}>
+              <div className="total-value">{summary.messages.toLocaleString()}</div>
+              <div className="total-label">messages</div>
             </div>
             <div className="total">
               <div className="total-value">{fmtTokens(summary.tokens)}</div>
               <div className="total-label">tokens</div>
+            </div>
+            <div className="total">
+              <div className="total-value">{fmtCost(summary.cost)}</div>
+              <div className="total-label">cost</div>
             </div>
           </div>
         </aside>
@@ -92,86 +128,64 @@ export function ProjectPage() {
             <p className="lede">Every session {author} ran in this project.</p>
           </div>
 
-          {!rows ? (
+          <div className="controls">
+            <ViewToggle
+              label="Layout"
+              value={layout}
+              onChange={setLayout}
+              options={[
+                { value: 'cards', label: 'Cards' },
+                { value: 'table', label: 'Table' },
+              ]}
+            />
+          </div>
+
+          {err ? (
+            <div className="empty">
+              <h3>Can’t reach the server</h3>
+              <p className="muted">{err}</p>
+            </div>
+          ) : !loaded ? (
             <div className="empty">Loading…</div>
           ) : sessions.length === 0 ? (
             <div className="empty">
               <h3>No sessions in this project</h3>
             </div>
           ) : (
-            <div className="grid">
-              {sessions.map((s) => (
-                <SessionCard key={s.id} s={s} />
-              ))}
-            </div>
+            <>
+              <SessionList sessions={sessions} layout={layout} onDelete={(s) => setPendingSession(s)} />
+              {!done && (
+                <div style={{ textAlign: 'center', marginTop: 16 }}>
+                  <button type="button" className="chip" onClick={() => setOffset((o) => o + LIMIT)}>
+                    Load more
+                  </button>
+                </div>
+              )}
+            </>
           )}
         </main>
       </div>
-    </Shell>
-  );
-}
 
-function SessionCard({ s }: { s: SessionSummary }) {
-  const st = s.stats;
-  return (
-    <Link to={`/session/${s.id}`} className="card">
-      <div className="card-head">
-        <h3 className="card-title">{s.title}</h3>
-        <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexShrink: 0 }}>
-          {s.hidden && <span className="badge-hidden">hidden</span>}
-          {s.featured && (
-            <span className="star" title="Featured">
-              ★
-            </span>
-          )}
-        </div>
-      </div>
-      {s.note && <p className="card-note">{s.note}</p>}
-      <div className="card-meta">
-        <span>{fmtDate(s.startedAt ?? s.createdAt)}</span>
-        {s.gitBranch && (
+      <ConfirmDialog
+        open={deleteProjectOpen}
+        title={`Delete project “${project}”?`}
+        body={
           <>
-            <span className="dot">·</span>
-            <span className="mono">{s.gitBranch}</span>
+            This permanently deletes all {sessions.length} session(s) in “{project}” by {author}.
+            This cannot be undone.
           </>
-        )}
-      </div>
-      <div className="card-stats">
-        <Stat label="turns" value={String(st.turns)} accent />
-        <Stat label="tokens" value={fmtTokens(st.totalTokens)} />
-      </div>
-      {(st.skills.length > 0 || st.subagents.length > 0) && (
-        <div className="card-skills">
-          {st.skills.map((sk) => (
-            <span key={sk} className="pill skill">
-              /{sk}
-            </span>
-          ))}
-          {st.subagents.map((a) => (
-            <span key={a} className="pill agent">
-              @{a}
-            </span>
-          ))}
-        </div>
-      )}
-      {s.tags.length > 0 && (
-        <div className="card-tags">
-          {s.tags.map((t) => (
-            <span key={t} className="tag mini">
-              {t}
-            </span>
-          ))}
-        </div>
-      )}
-    </Link>
-  );
-}
-
-function Stat({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="stat">
-      <div className={accent ? 'stat-value accent' : 'stat-value'}>{value}</div>
-      <div className="stat-label">{label}</div>
-    </div>
+        }
+        typeToConfirm={project}
+        onConfirm={confirmDeleteProject}
+        onCancel={() => setDeleteProjectOpen(false)}
+      />
+      <ConfirmDialog
+        open={!!pendingSession}
+        title="Delete this session?"
+        body={<>“{pendingSession?.title}” will be permanently deleted.</>}
+        onConfirm={confirmDeleteSession}
+        onCancel={() => setPendingSession(null)}
+      />
+    </Shell>
   );
 }

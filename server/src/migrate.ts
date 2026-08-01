@@ -1,7 +1,8 @@
-import { pool, SCHEMA } from './db.js';
+import { pool, SCHEMA, MIGRATIONS } from './db.js';
 
 async function main() {
   await pool.query(SCHEMA);
+  await pool.query(MIGRATIONS);
   console.log('✔ ClaudeLens schema applied');
   await pool.end();
 }

@@ -10,5 +10,8 @@ node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" untrack-session "${CLAUDE_SESSI
 
 This marks the session as opted-out. The check runs **before** any upload, so
 if the user does this at the start of a session, nothing from it reaches the
-server. Relay the output. To undo, `/claudelens:track`. To exclude the whole
-project instead, `/claudelens:untrack-project`.
+server. This is purely local (a config flag on this machine) — it does not
+delete anything already on the server. To remove a session already uploaded,
+that's a dashboard delete action, not this command. Relay the output. To undo,
+`/claudelens:track`. To exclude the whole project instead,
+`/claudelens:untrack-project`.

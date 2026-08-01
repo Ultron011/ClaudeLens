@@ -7,11 +7,21 @@ export interface SessionDetail extends SessionSummary {
 
 export interface AuthorSummary {
   author: string;
+  /** coalesce(account_email, author) — the stable grouping key. Prefer this over `author` in
+   *  links, since one person can have several `author` strings (git config varies per repo). */
+  identity: string;
+  /** Most recent account display name, else the author string. What to show a human. */
+  label: string;
+  orgName: string | null;
   sessions: number;
   projects: number;
   featured: number;
   cost: string | null;
   turns: number;
+  /** Human-sent messages — coalesced with the legacy `userTurns` field server-side. */
+  userMessages: number;
+  tokens: string | null;
+  autoSessions: number;
 }
 
 export interface OrgStats {
@@ -21,19 +31,83 @@ export interface OrgStats {
   tools: Array<{ tool: string; uses: number }>;
 }
 
-async function get<T>(url: string): Promise<T> {
-  const r = await fetch(url);
+/** §2b response shape for GET /api/analytics. `daily.sessions` counts sessions *active* that
+ *  day, not exclusively — it won't sum to `totals.sessions`. */
+export interface AnalyticsTotals {
+  sessions: number;
+  turns: number;
+  userMessages: number;
+  tokens: number;
+  cost: string | null;
+}
+export interface AnalyticsDaily {
+  day: string;
+  sessions: number;
+  turns: number;
+  userMessages: number;
+  tokens: number;
+  cost: string | null;
+}
+export interface AnalyticsModel {
+  model: string;
+  sessions: number;
+  turns: number;
+  activeMs: number;
+  tokens: number;
+  cost: string | null;
+  measured: boolean;
+}
+export interface Analytics {
+  tz: 'UTC';
+  totals: AnalyticsTotals;
+  daily: AnalyticsDaily[];
+  models: AnalyticsModel[];
+}
+
+export interface ListSessionsParams {
+  author?: string;
+  project?: string;
+  identity?: string;
+  autoMode?: boolean;
+  from?: string;
+  to?: string;
+  limit?: number;
+  offset?: number;
+}
+
+async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const r = await fetch(url, { signal });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json() as Promise<T>;
 }
 
-export function listSessions(params: Record<string, string>): Promise<SessionSummary[]> {
-  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v));
-  return get(`/api/sessions?${q}`);
+function qs(params: object): string {
+  const q = new URLSearchParams();
+  for (const [k, v] of Object.entries(params)) if (v !== undefined && v !== '') q.set(k, String(v));
+  return q.toString();
 }
 
-export const getSession = (id: string) => get<SessionDetail>(`/api/sessions/${id}`);
-export const getStats = () => get<OrgStats>('/api/stats');
+/** Bare array response — the server keeps that shape, there is no envelope. */
+export function listSessions(
+  params: ListSessionsParams = {},
+  signal?: AbortSignal,
+): Promise<SessionSummary[]> {
+  return get(`/api/sessions?${qs(params)}`, signal);
+}
+
+export const getSession = (id: string, signal?: AbortSignal) =>
+  get<SessionDetail>(`/api/sessions/${id}`, signal);
+export const getStats = (signal?: AbortSignal) => get<OrgStats>('/api/stats', signal);
+
+/** Omit `identity` for org-wide analytics. */
+export function getAnalytics(
+  identity?: string,
+  from?: string,
+  to?: string,
+  signal?: AbortSignal,
+): Promise<Analytics> {
+  return get(`/api/analytics?${qs({ identity, from, to })}`, signal);
+}
 
 export async function patchSession(
   id: string,

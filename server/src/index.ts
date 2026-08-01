@@ -4,7 +4,7 @@ import 'dotenv/config';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { pool, SCHEMA } from './db.js';
+import { pool, SCHEMA, MIGRATIONS } from './db.js';
 import type { IngestPayload } from '@claudelens/shared';
 
 const app = express();
@@ -16,6 +16,16 @@ const INGEST_TOKEN = process.env.CLAUDELENS_TOKEN ?? '';
 // --- helpers ---------------------------------------------------------------
 
 function summaryRow(r: any) {
+  const stats = {
+    ...r.stats,
+    permissionModes: r.stats?.permissionModes ?? [],
+    usedAutoMode: r.stats?.usedAutoMode ?? false,
+    modelUsage: r.stats?.modelUsage ?? {},
+    daily: r.stats?.daily ?? {},
+    // Legacy rows (parser_version 0-2) have `userTurns`, not `userMessages`. Without this
+    // fallback every old session would show 0 messages — worse than the inflated `turns`.
+    userMessages: r.stats?.userMessages ?? r.stats?.userTurns ?? 0,
+  };
   return {
     id: r.id,
     sessionId: r.session_id,
@@ -27,11 +37,26 @@ function summaryRow(r: any) {
     tags: r.tags ?? [],
     featured: r.featured,
     hidden: r.hidden,
-    stats: r.stats,
+    stats,
     startedAt: r.started_at ?? undefined,
+    endedAt: r.ended_at ?? undefined,
     createdAt: r.created_at,
+    accountEmail: r.account_email ?? undefined,
+    displayName: r.account_display_name ?? undefined,
+    orgName: r.org_name ?? undefined,
+    usedAutoMode: r.used_auto_mode ?? undefined,
+    permissionModes: r.permission_modes ?? undefined,
+    parserVersion: r.parser_version ?? undefined,
   };
 }
+
+// coalesce(account_email, author) = identity — old rows still group by author alone.
+const IDENTITY_CLAUSE = (n: number) =>
+  `(account_email = $${n} OR (account_email IS NULL AND author = $${n}))`;
+
+// Genuine human messages, with the userTurns fallback for parser_version 0-2 rows.
+const USER_MESSAGES_EXPR =
+  `coalesce((stats->>'userMessages')::int, (stats->>'userTurns')::int, 0)`;
 
 // --- routes ----------------------------------------------------------------
 
@@ -49,16 +74,42 @@ app.post('/api/sessions', async (req, res) => {
   }
   const s = body.session;
   try {
+    // Tombstone gate: a prior delete of this session or its project must stick. The Stop hook is
+    // fire-and-forget, so this is always a 200 — a 4xx would just be swallowed.
+    const tomb = await pool.query(
+      `SELECT scope FROM deletions
+        WHERE author = $2 AND ((scope='session' AND session_id = $1)
+           OR (scope='project' AND ((no_project AND $3::text IS NULL) OR project = $3)))
+        LIMIT 1`,
+      [s.sessionId, body.author, s.project ?? null],
+    );
+    if (tomb.rows.length) {
+      const scope = tomb.rows[0].scope as 'session' | 'project';
+      return res.json({
+        ignored: true,
+        untrack:
+          scope === 'session' ? { sessionId: s.sessionId } : { cwd: s.cwd ?? s.project },
+      });
+    }
+
     const { rows } = await pool.query(
       `INSERT INTO sessions
-         (session_id, title, author, author_email, project, git_branch, note, tags, stats, transcript, started_at, ended_at)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+         (session_id, title, author, author_email, project, git_branch, note, tags, stats, transcript,
+          started_at, ended_at, account_email, account_display_name, org_name, used_auto_mode,
+          permission_modes, parser_version)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
        ON CONFLICT (session_id, author) DO UPDATE SET
          title=EXCLUDED.title, project=EXCLUDED.project, git_branch=EXCLUDED.git_branch,
          note=COALESCE(EXCLUDED.note, sessions.note),
          tags=CASE WHEN cardinality(EXCLUDED.tags) > 0 THEN EXCLUDED.tags ELSE sessions.tags END,
          stats=EXCLUDED.stats,
          transcript=EXCLUDED.transcript, started_at=EXCLUDED.started_at, ended_at=EXCLUDED.ended_at,
+         account_email=COALESCE(EXCLUDED.account_email, sessions.account_email),
+         account_display_name=COALESCE(EXCLUDED.account_display_name, sessions.account_display_name),
+         org_name=COALESCE(EXCLUDED.org_name, sessions.org_name),
+         used_auto_mode=EXCLUDED.used_auto_mode OR sessions.used_auto_mode,
+         permission_modes=EXCLUDED.permission_modes,
+         parser_version=GREATEST(EXCLUDED.parser_version, sessions.parser_version),
          updated_at=now()
        RETURNING id`,
       [
@@ -74,6 +125,12 @@ app.post('/api/sessions', async (req, res) => {
         JSON.stringify(s.turns),
         s.startedAt ?? null,
         s.endedAt ?? null,
+        body.account?.email ?? null,
+        body.account?.displayName ?? null,
+        body.account?.organizationName ?? null,
+        s.stats?.usedAutoMode ?? false,
+        s.stats?.permissionModes ?? [],
+        s.parserVersion ?? 0,
       ],
     );
     res.json({ id: rows[0].id, url: `/session/${rows[0].id}` });
@@ -85,10 +142,8 @@ app.post('/api/sessions', async (req, res) => {
 
 // List / filter / search (no transcript body).
 app.get('/api/sessions', async (req, res) => {
-  const { author, project, tag, featured, q, sort, includeHidden } = req.query as Record<
-    string,
-    string
-  >;
+  const { author, project, tag, featured, q, sort, includeHidden, identity, autoMode, from, to } =
+    req.query as Record<string, string>;
   const where: string[] = [];
   const args: unknown[] = [];
   const add = (clause: string, val: unknown) => {
@@ -100,6 +155,13 @@ app.get('/api/sessions', async (req, res) => {
   if (project) add('project = ?', project);
   if (tag) add('? = ANY(tags)', tag);
   if (featured === 'true') where.push('featured = true');
+  if (identity) {
+    args.push(identity);
+    where.push(IDENTITY_CLAUSE(args.length));
+  }
+  if (autoMode === 'true') where.push('used_auto_mode = true');
+  if (from) add('started_at >= ?', from);
+  if (to) add('started_at < ?', to);
   if (q) {
     args.push(`%${q}%`);
     const p = `$${args.length}`;
@@ -111,13 +173,21 @@ app.get('/api/sessions', async (req, res) => {
       ? `(stats->>'estimatedCostUsd')::float DESC NULLS LAST`
       : sort === 'turns'
         ? `(stats->>'turns')::int DESC NULLS LAST`
-        : 'featured DESC, created_at DESC';
+        : sort === 'messages'
+          ? `${USER_MESSAGES_EXPR} DESC NULLS LAST`
+          : 'featured DESC, created_at DESC';
 
-  const sql = `SELECT id, session_id, title, author, project, note, tags, featured, hidden, stats, started_at, created_at
+  const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
+  const offset = Math.max(Number(req.query.offset) || 0, 0);
+  args.push(limit, offset);
+
+  const sql = `SELECT id, session_id, title, author, project, git_branch, note, tags, featured, hidden,
+                      stats, started_at, ended_at, created_at, account_email, account_display_name,
+                      org_name, used_auto_mode, permission_modes, parser_version
                FROM sessions
                ${where.length ? 'WHERE ' + where.join(' AND ') : ''}
                ORDER BY ${orderBy}
-               LIMIT 200`;
+               LIMIT $${args.length - 1} OFFSET $${args.length}`;
   try {
     const { rows } = await pool.query(sql, args);
     res.json(rows.map(summaryRow));
@@ -127,17 +197,85 @@ app.get('/api/sessions', async (req, res) => {
   }
 });
 
+// One-endpoint analytics: three queries over one filtered scope, run concurrently so the daily/
+// models/totals panels can never disagree. identity omitted = org-wide.
+app.get('/api/analytics', async (req, res) => {
+  const { identity, from, to } = req.query as Record<string, string>;
+  const args: unknown[] = [identity ?? null, from ?? null, to ?? null];
+  // $1 is referenced unconditionally (and cast, so Postgres can type it) even org-wide: a query
+  // text that never mentions $1 while still binding it fails with "could not determine data type".
+  const scopeWhere =
+    `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
+    ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
+  try {
+    const [totalsQ, dailyQ, modelsQ] = await Promise.all([
+      pool.query(
+        `SELECT count(*)::int AS sessions,
+                sum((stats->>'turns')::int)::int AS turns,
+                sum(${USER_MESSAGES_EXPR})::int AS "userMessages",
+                sum((stats->>'totalTokens')::bigint)::bigint AS tokens,
+                round(sum((stats->>'estimatedCostUsd')::numeric), 4) AS cost
+           FROM sessions WHERE ${scopeWhere}`,
+        args,
+      ),
+      pool.query(
+        `WITH scope AS (SELECT stats FROM sessions WHERE ${scopeWhere})
+         SELECT kv.key AS day, count(*)::int AS sessions,
+                sum((kv.value->>'turns')::int)::int AS turns,
+                sum(coalesce((kv.value->>'userMessages')::int, 0))::int AS "userMessages",
+                sum((kv.value->>'totalTokens')::bigint)::bigint AS tokens,
+                round(sum((kv.value->>'costUsd')::numeric), 4) AS cost
+           FROM scope, LATERAL jsonb_each(coalesce(stats->'daily','{}'::jsonb)) kv
+          GROUP BY day ORDER BY day`,
+        args,
+      ),
+      pool.query(
+        `WITH scope AS (SELECT stats FROM sessions WHERE ${scopeWhere})
+         SELECT kv.key AS model, count(*)::int AS sessions,
+                sum((kv.value->>'turns')::int)::int AS turns,
+                sum((kv.value->>'activeMs')::bigint)::bigint AS "activeMs",
+                sum((kv.value->>'totalTokens')::bigint)::bigint AS tokens,
+                round(sum((kv.value->>'costUsd')::numeric), 4) AS cost,
+                bool_and((kv.value->>'measured')::boolean) AS measured
+           FROM scope, LATERAL jsonb_each(coalesce(stats->'modelUsage','{}'::jsonb)) kv
+          GROUP BY 1 ORDER BY "activeMs" DESC NULLS LAST`,
+        args,
+      ),
+    ]);
+    // daily[].sessions counts a session on every day it was active (resumes span days), so it
+    // won't sum to totals.sessions — that's activity, not a partition.
+    res.json({
+      tz: 'UTC',
+      totals: totalsQ.rows[0],
+      daily: dailyQ.rows,
+      models: modelsQ.rows,
+    });
+  } catch (err) {
+    console.error('analytics error:', err);
+    res.status(500).json({ error: 'analytics failed' });
+  }
+});
+
 // Aggregate stats for the value / leaderboard panel.
 app.get('/api/stats', async (_req, res) => {
   try {
     const authors = await pool.query(`
-      SELECT author,
+      SELECT coalesce(account_email, author) AS identity,
+             (array_agg(author ORDER BY updated_at DESC))[1] AS author,
+             coalesce(
+               (array_agg(account_display_name ORDER BY updated_at DESC) FILTER (WHERE account_display_name IS NOT NULL))[1],
+               (array_agg(author ORDER BY updated_at DESC))[1]
+             ) AS label,
+             (array_agg(org_name ORDER BY updated_at DESC) FILTER (WHERE org_name IS NOT NULL))[1] AS "orgName",
              count(*)::int AS sessions,
              count(DISTINCT project)::int AS projects,
              count(*) FILTER (WHERE featured)::int AS featured,
+             count(*) FILTER (WHERE used_auto_mode)::int AS "autoSessions",
              round(sum((stats->>'estimatedCostUsd')::numeric), 2) AS cost,
-             sum((stats->>'turns')::int)::int AS turns
-      FROM sessions WHERE hidden = false GROUP BY author ORDER BY sessions DESC`);
+             sum((stats->>'turns')::int)::int AS turns,
+             sum(${USER_MESSAGES_EXPR})::int AS "userMessages",
+             sum((stats->>'totalTokens')::bigint)::bigint AS tokens
+      FROM sessions WHERE hidden = false GROUP BY identity ORDER BY sessions DESC`);
     const skills = await pool.query(`
       SELECT skill, count(*)::int AS uses FROM sessions,
         LATERAL jsonb_array_elements_text(stats->'skills') AS skill
@@ -214,37 +352,71 @@ app.patch('/api/sessions/:id', async (req, res) => {
   }
 });
 
-// Delete a single session.
+// Delete a single session. Writes a tombstone in the same transaction so the next Stop hook
+// can't resurrect the row.
 app.delete('/api/sessions/:id', async (req, res) => {
+  const client = await pool.connect();
   try {
-    const { rowCount } = await pool.query('DELETE FROM sessions WHERE id = $1', [req.params.id]);
-    if (!rowCount) return res.status(404).json({ error: 'not found' });
+    await client.query('BEGIN');
+    const found = await client.query('SELECT session_id, author FROM sessions WHERE id = $1', [
+      req.params.id,
+    ]);
+    if (!found.rows.length) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ error: 'not found' });
+    }
+    const { session_id, author } = found.rows[0];
+    await client.query(
+      `INSERT INTO deletions (scope, author, session_id) VALUES ('session', $1, $2)
+       ON CONFLICT DO NOTHING`,
+      [author, session_id],
+    );
+    const { rowCount } = await client.query('DELETE FROM sessions WHERE id = $1', [
+      req.params.id,
+    ]);
+    await client.query('COMMIT');
     res.json({ deleted: rowCount });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('delete error:', err);
     res.status(500).json({ error: 'delete failed' });
+  } finally {
+    client.release();
   }
 });
 
-// Delete every session for one author+project (a "project" on the dashboard).
+// Delete every session for one author+project (a "project" on the dashboard). Same
+// same-transaction tombstone. The '(no project)' sentinel is a route-boundary concept only —
+// it must not leak into the deletions table as a literal string.
 app.delete('/api/projects', async (req, res) => {
   const { author, project } = req.query as Record<string, string>;
   if (!author || !project) {
     return res.status(400).json({ error: 'author and project are required' });
   }
-  // The dashboard groups project-less sessions under "(no project)".
   const noProject = project === '(no project)';
+  const projectVal = noProject ? null : project;
+  const client = await pool.connect();
   try {
-    const { rowCount } = await pool.query(
+    await client.query('BEGIN');
+    await client.query(
+      `INSERT INTO deletions (scope, author, project, no_project) VALUES ('project', $1, $2, $3)
+       ON CONFLICT DO NOTHING`,
+      [author, projectVal, noProject],
+    );
+    const { rowCount } = await client.query(
       noProject
         ? 'DELETE FROM sessions WHERE author = $1 AND project IS NULL'
         : 'DELETE FROM sessions WHERE author = $1 AND project = $2',
-      noProject ? [author] : [author, project],
+      noProject ? [author] : [author, projectVal],
     );
+    await client.query('COMMIT');
     res.json({ deleted: rowCount ?? 0 });
   } catch (err) {
+    await client.query('ROLLBACK');
     console.error('delete project error:', err);
     res.status(500).json({ error: 'delete failed' });
+  } finally {
+    client.release();
   }
 });
 
@@ -265,6 +437,7 @@ const PORT = Number(process.env.PORT ?? 4000);
 
 async function start() {
   await pool.query(SCHEMA); // ensure schema on boot (idempotent)
+  await pool.query(MIGRATIONS);
   app.listen(PORT, () => console.log(`ClaudeLens server on http://localhost:${PORT}`));
 }
 

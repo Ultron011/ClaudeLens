@@ -1,0 +1,121 @@
+/* Appended after styles.css. Dialog styles for now — T5 (tables) and T7 (charts) add their own
+ * sections below, keeping one extra stylesheet instead of one per feature. */
+
+/* ---- ConfirmDialog ---- */
+.confirm-dialog {
+  background: var(--bg-elev);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 20px;
+  max-width: 420px;
+  width: calc(100vw - 40px);
+}
+.confirm-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+}
+.confirm-dialog h3 { margin: 0 0 8px; font-size: 16px; }
+.confirm-body { color: var(--text-dim); font-size: 13.5px; line-height: 1.5; margin: 0 0 14px; }
+.confirm-type {
+  display: flex; flex-direction: column; gap: 6px;
+  font-size: 12.5px; color: var(--text-dim); margin-bottom: 14px;
+}
+.confirm-type input {
+  background: var(--bg-card); border: 1px solid var(--border); color: var(--text);
+  border-radius: 8px; padding: 8px 10px; font-family: var(--mono); font-size: 13px;
+}
+.confirm-actions { display: flex; justify-content: flex-end; gap: 10px; }
+.confirm-actions .chip.danger:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* ---- tables ---- */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+}
+
+.view-toggle { display: flex; gap: 6px; }
+
+/* Grid items default to min-width:auto (their content's max-content size), so a wide table
+ * inside `.content` pushes the `.layout` grid track — and the page body — wider than the
+ * viewport instead of scrolling internally. min-width:0 lets `.table-scroll`'s own overflow-x
+ * do the job. */
+.layout > .content { min-width: 0; }
+
+/* No overflow-x here on purpose: any non-visible overflow on an ancestor makes it the containing
+ * block for `position: sticky` descendants (CSS Overflow §3 also forces overflow-y into a real
+ * scroll container the moment overflow-x isn't 'visible'). A scroll container that's never
+ * actually scrolled by the user — which .table-scroll never is, since the page scrolls, not this
+ * div — gives the sticky <th> nothing to stick *to*: it just rides along with the page instead of
+ * pinning under the topbar. So the horizontal-scroll affordance only turns on under 720px (below),
+ * where a pinned first column matters more than a working sticky header on a wide desktop table. */
+.table-scroll {
+  border: 1px solid var(--border-soft); border-radius: var(--radius);
+}
+/* border-collapse: collapse breaks `position: sticky` on <th> in every current browser engine
+ * (the collapsed border box loses its own layout box, so the sticky row and the first tbody row
+ * render on top of each other). border-spacing: 0 + row-level borders gets the hairline look back
+ * without the bug. */
+.data-table { width: 100%; border-collapse: separate; border-spacing: 0; font-size: 13px; }
+.data-table thead th {
+  position: sticky; top: var(--topbar-h); z-index: 1;
+  background: var(--bg-elev); color: var(--text-dim);
+  text-align: left; font-weight: 600; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.04em; padding: 10px 14px; border-bottom: 1px solid var(--border-soft);
+  white-space: nowrap;
+}
+.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.data-table td { padding: 10px 14px; border-top: 1px solid var(--border-soft); vertical-align: middle; }
+.data-table tbody tr:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.th-sort {
+  background: none; border: none; color: inherit; font: inherit; text-transform: inherit;
+  letter-spacing: inherit; padding: 0; cursor: pointer; display: inline-flex; gap: 4px; align-items: center;
+}
+.th-sort:hover { color: var(--text); }
+
+/* Under 720px: horizontal scroll turns on (trading the sticky-header/page-scroll behavior above
+ * for a usable narrow-viewport table — see the .table-scroll comment) and the first column pins
+ * so the scroll stays orientable.
+ * ponytail: a table that's wider than the viewport at ≥720px will still bleed past .content
+ * (no overflow-x there — see above). Not fixed here: it needs either a max-width per column or
+ * accepting the sticky-header trade-off below 720px too. Revisit if a real dataset hits it. */
+@media (max-width: 720px) {
+  .table-scroll { overflow-x: auto; }
+  .data-table th:first-child, .data-table td:first-child {
+    position: sticky; left: 0; z-index: 2; background: var(--bg-card);
+  }
+  .data-table thead th:first-child { z-index: 3; background: var(--bg-elev); }
+}
+
+/* ---- charts ---- */
+.analytics-kpis { border-top: none; padding: 0; margin-bottom: 20px; gap: 28px; }
+.chart-panel { margin-bottom: 16px; }
+.chart-panel h4 { margin-bottom: 8px; }
+
+.chart { position: relative; }
+.chart svg { display: block; }
+.chart svg:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+.chart-readout {
+  display: flex; flex-wrap: wrap; gap: 14px; align-items: center;
+  font-size: 12.5px; color: var(--text-dim); margin-top: 6px;
+}
+.chart-readout strong { color: var(--text); font-weight: 600; }
+.chart-readout i, .chart-legend i, .model-dot {
+  display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: middle;
+}
+
+.chart-legend { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 8px; font-size: 12px; color: var(--text-dim); }
+
+/* Own scoped table styling — deliberately not reusing .data-table (T5's generic DataTable may
+ * not exist yet when this compiles; unify later if it's worth it). */
+.chart-table-wrap { overflow-x: auto; border: 1px solid var(--border-soft); border-radius: var(--radius); }
+.chart-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.chart-table th {
+  text-align: left; font-weight: 600; font-size: 11.5px; text-transform: uppercase;
+  letter-spacing: 0.04em; color: var(--text-dim); padding: 10px 14px;
+  border-bottom: 1px solid var(--border-soft); white-space: nowrap;
+}
+.chart-table td { padding: 10px 14px; border-top: 1px solid var(--border-soft); }
+.chart-table th.num, .chart-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.chart-table tbody tr:hover { background: color-mix(in srgb, var(--text) 4%, transparent); }

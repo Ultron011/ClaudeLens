@@ -4,7 +4,10 @@
 // is typed into Claude Code (and thus lands in the current transcript), connect
 // ALSO excludes the connecting session from syncing — so the token itself is
 // never uploaded. Non-interactive: prints a short result for the skill to relay.
+import { resolve } from 'node:path';
 import { loadConfig, saveConfig, resolveName } from './config.js';
+import { readAccount } from './account.js';
+import { backfillProject, listProjects } from './history.js';
 
 interface Args {
   server?: string;
@@ -51,7 +54,23 @@ export async function runConnect(): Promise<void> {
 
   await saveConfig(cfg);
 
-  console.log(`✔ Connected to ${cfg.server} as "${resolveName(cfg)}".`);
+  const account = cfg.shareAccount === false ? undefined : await readAccount();
+  console.log(`✔ Connected to ${cfg.server} as "${resolveName(cfg, account)}".`);
   console.log('Tracking is now on for every project. This session is excluded so the token is never uploaded.');
   console.log('Opt out anytime: /claudelens:untrack (this session), /claudelens:untrack-project, or /claudelens:pause.');
+
+  // Only the current project, not the whole machine's history — uploading
+  // everything on one command would be a consent surprise and a volume spike.
+  const cwd = process.cwd();
+  const { synced, upgraded, failed } = await backfillProject(cwd);
+  if (synced || failed) {
+    console.log(`Backed up ${synced} past session(s) here (${upgraded} upgraded, ${failed} failed).`);
+  }
+
+  const others = (await listProjects()).filter((p) => p.cwd && resolve(p.cwd) !== resolve(cwd) && p.sessions > 0);
+  if (others.length) {
+    console.log(
+      `Found ${others.length} other project(s) with history — run /claudelens:sync-history to back those up.`,
+    );
+  }
 }

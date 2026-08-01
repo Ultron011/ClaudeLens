@@ -1,35 +1,39 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import type { Turn } from '@claudelens/shared';
+import type { Turn, ToolCall } from '@claudelens/shared';
 import { getSession, patchSession, deleteSession, type SessionDetail } from '../api.js';
-import { fmtDuration, fmtTokens } from '../format.js';
+import { fmtDuration, fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Shell, type Crumb } from '../components/Shell.js';
+import { Metric } from '../components/Stat.js';
+import { ConfirmDialog } from '../components/ConfirmDialog.js';
+import { AccountLine } from '../components/AccountLine.js';
+import { ModeBadges, TurnModeBadge, modalMode } from '../components/ModeBadges.js';
+import { useFetch } from '../useFetch.js';
 
 export function SessionPage() {
-  const { id } = useParams<{ id: string }>();
-  const [s, setS] = useState<SessionDetail | null>(null);
-  const [err, setErr] = useState('');
+  const { id = '' } = useParams<{ id: string }>();
+  const {
+    data: s,
+    err,
+    refetch,
+  } = useFetch<SessionDetail>((signal) => getSession(id, signal), [id]);
+  const [pendingDelete, setPendingDelete] = useState(false);
   const nav = useNavigate();
-
-  useEffect(() => {
-    if (!id) return;
-    getSession(id).then(setS).catch((e) => setErr(String(e)));
-  }, [id]);
 
   async function toggleFeatured() {
     if (!s) return;
-    const u = await patchSession(s.id, { featured: !s.featured });
-    setS({ ...s, featured: u.featured });
+    await patchSession(s.id, { featured: !s.featured });
+    refetch();
   }
-  async function remove() {
+  async function confirmDelete() {
     if (!s) return;
-    if (!window.confirm(`Delete this session permanently?\n\n“${s.title}”`)) return;
     await deleteSession(s.id);
-    // back to the project (or the author) it belonged to
+    setPendingDelete(false);
     nav(
       s.project
         ? `/u/${encodeURIComponent(s.author)}/${encodeURIComponent(s.project)}`
         : `/u/${encodeURIComponent(s.author)}`,
+      { replace: true },
     );
   }
 
@@ -50,6 +54,7 @@ export function SessionPage() {
     );
 
   const st = s.stats;
+  const modal = modalMode(s.turns);
   const crumbs: Crumb[] = [
     { label: s.author, to: `/u/${encodeURIComponent(s.author)}` },
   ];
@@ -68,7 +73,7 @@ export function SessionPage() {
           <button className={s.featured ? 'chip on' : 'chip'} onClick={toggleFeatured}>
             ★ {s.featured ? 'Featured' : 'Feature'}
           </button>
-          <button className="chip danger" onClick={remove}>
+          <button className="chip danger" onClick={() => setPendingDelete(true)}>
             Delete
           </button>
         </>
@@ -92,16 +97,24 @@ export function SessionPage() {
                 · <code>{s.gitBranch}</code>
               </>
             )}
+            <AccountLine email={s.accountEmail} orgName={s.orgName} />
           </div>
           {s.note && <blockquote className="why">{s.note}</blockquote>}
 
           <div className="session-stats">
-            <Metric label="turns" value={String(st.turns)} accent />
+            <Metric
+              label="messages"
+              value={String(msgCount(st))}
+              accent
+              title={`${st.turns} Claude turns`}
+            />
             <Metric label="tokens" value={fmtTokens(st.totalTokens)} />
             <Metric label="cache read" value={fmtTokens(st.cacheReadTokens)} />
             {st.durationMs ? <Metric label="duration" value={fmtDuration(st.durationMs)} /> : null}
+            <Metric label="cost" value={fmtCost(st.estimatedCostUsd)} />
             <Metric label="models" value={st.models.join(', ') || '—'} />
           </div>
+          <ModeBadges modes={st.permissionModes} usedAutoMode={st.usedAutoMode} />
 
           {(st.skills.length > 0 || st.subagents.length > 0) && (
             <div className="session-pills">
@@ -132,24 +145,23 @@ export function SessionPage() {
 
         <div className="transcript">
           {s.turns.map((t, i) => (
-            <TurnView key={i} turn={t} />
+            <TurnView key={i} turn={t} modal={modal} />
           ))}
         </div>
       </div>
+
+      <ConfirmDialog
+        open={pendingDelete}
+        title="Delete this session?"
+        body={<>“{s.title}” will be permanently deleted. This cannot be undone.</>}
+        onConfirm={confirmDelete}
+        onCancel={() => setPendingDelete(false)}
+      />
     </Shell>
   );
 }
 
-function Metric({ label, value, accent }: { label: string; value: string; accent?: boolean }) {
-  return (
-    <div className="metric">
-      <div className={accent ? 'metric-value accent' : 'metric-value'}>{value}</div>
-      <div className="metric-label">{label}</div>
-    </div>
-  );
-}
-
-function TurnView({ turn }: { turn: Turn }) {
+function TurnView({ turn, modal }: { turn: Turn; modal?: Turn['permissionMode'] }) {
   const [showThinking, setShowThinking] = useState(false);
   const isUser = turn.role === 'user';
   return (
@@ -157,6 +169,7 @@ function TurnView({ turn }: { turn: Turn }) {
       <div className="turn-role">
         {isUser ? 'User' : 'Claude'}
         {turn.isSidechain && <span className="badge">subagent</span>}
+        <TurnModeBadge mode={turn.permissionMode} modal={modal} />
       </div>
       <div className="turn-body">
         {turn.thinking && (
@@ -171,14 +184,34 @@ function TurnView({ turn }: { turn: Turn }) {
         {turn.toolCalls.length > 0 && (
           <div className="tool-calls">
             {turn.toolCalls.map((tc, i) => (
-              <span key={i} className="tool-call">
-                <span className="tc-name">{tc.name}</span>
-                {tc.detail && <span className="tc-detail">{tc.detail}</span>}
-              </span>
+              <ToolCallRow key={i} tc={tc} />
             ))}
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function ToolCallRow({ tc }: { tc: ToolCall }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div className="tool-call">
+      <span className="tc-name">{tc.name}</span>
+      {tc.detail && <span className="tc-detail">{tc.detail}</span>}
+      {tc.args && (
+        <button
+          type="button"
+          className={`tc-args${expanded ? ' expanded' : ''}`}
+          title={tc.args}
+          aria-expanded={expanded}
+          aria-label={expanded ? 'Collapse command' : 'Expand command'}
+          onClick={() => setExpanded((v) => !v)}
+        >
+          {tc.args}
+        </button>
+      )}
     </div>
   );
 }

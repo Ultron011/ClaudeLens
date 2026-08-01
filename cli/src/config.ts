@@ -11,16 +11,18 @@
 //   • a committed `.claudelens` file           excludes a repo for the WHOLE team
 //   • DO_NOT_TRACK / CLAUDELENS_DISABLE env    honored as a global opt-out
 //
-// backfilledSessions records session ids already uploaded by /claudelens:sync-history
-// (the bulk backfill command), purely so re-running it skips unchanged old
-// sessions — the server itself dedups on (session_id, author) regardless.
+// backfilled maps session id -> the PARSER_VERSION that last uploaded it, so
+// re-running /claudelens:sync-history skips unchanged old sessions but still
+// re-uploads ones a parser bump can now extract more from — the server itself
+// dedups on (session_id, author) regardless.
 //
 // Config lives at ~/.claude/claudelens.json (survives plugin updates). Nothing
 // syncs until `server` is set — connecting is the enablement step.
-import { readFile, writeFile } from 'node:fs/promises';
+import { readFile, writeFile, rename } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join, resolve, sep, dirname, parse as parsePath } from 'node:path';
+import type { AccountIdentity } from '@claudelens/shared';
 
 export const CONFIG_PATH = join(homedir(), '.claude', 'claudelens.json');
 
@@ -42,8 +44,12 @@ export interface ClaudeLensConfig {
   paused: boolean;
   /** Run secret redaction before upload. */
   redact: boolean;
-  /** Session ids already uploaded via /claudelens:sync-history. */
-  backfilledSessions: string[];
+  /** Session id -> the PARSER_VERSION that last uploaded it. Lets a future parser
+   *  bump auto-re-sync old sessions instead of skipping them forever. */
+  backfilled: Record<string, number>;
+  /** Attach the signed-in account (email/org/etc.) to syncs. Default true; set
+   *  false to opt out of sharing identity while still syncing transcripts. */
+  shareAccount?: boolean;
 }
 
 const EMPTY: ClaudeLensConfig = {
@@ -51,13 +57,21 @@ const EMPTY: ClaudeLensConfig = {
   ignoreSessions: [],
   paused: false,
   redact: false,
-  backfilledSessions: [],
+  backfilled: {},
 };
+
+/** Old shape had `backfilledSessions: string[]`; ids migrate to version 0 so
+ *  they re-sync exactly once against the current PARSER_VERSION and settle. */
+function migrateBackfilled(parsed: Partial<ClaudeLensConfig> & { backfilledSessions?: string[] }): Record<string, number> {
+  if (parsed.backfilled) return parsed.backfilled;
+  if (parsed.backfilledSessions) return Object.fromEntries(parsed.backfilledSessions.map((id) => [id, 0]));
+  return {};
+}
 
 export async function loadConfig(): Promise<ClaudeLensConfig> {
   try {
     const raw = await readFile(CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<ClaudeLensConfig>;
+    const parsed = JSON.parse(raw) as Partial<ClaudeLensConfig> & { backfilledSessions?: string[] };
     return {
       name: parsed.name,
       server: parsed.server ?? process.env.CLAUDELENS_SERVER,
@@ -66,7 +80,8 @@ export async function loadConfig(): Promise<ClaudeLensConfig> {
       ignoreSessions: parsed.ignoreSessions ?? [],
       paused: parsed.paused ?? false,
       redact: parsed.redact ?? false,
-      backfilledSessions: parsed.backfilledSessions ?? [],
+      backfilled: migrateBackfilled(parsed),
+      shareAccount: parsed.shareAccount,
     };
   } catch {
     // No config file yet — fall back to env so a centrally-provisioned machine
@@ -80,7 +95,11 @@ export async function loadConfig(): Promise<ClaudeLensConfig> {
 }
 
 export async function saveConfig(cfg: ClaudeLensConfig): Promise<void> {
-  await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  // ponytail: atomic rename only, no lock. Parallel hooks can still clobber; add an O_EXCL lock if
+  // that shows up.
+  const tmp = `${CONFIG_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+  await rename(tmp, CONFIG_PATH);
 }
 
 /** True once the plugin knows where to send — i.e. connect has run (or env is set). */
@@ -88,10 +107,14 @@ export function isConnected(cfg: ClaudeLensConfig): boolean {
   return Boolean(cfg.server);
 }
 
-/** The author name to attribute sessions to: explicit → env → git → OS user. */
-export function resolveName(cfg: ClaudeLensConfig): string {
+/** The author name to attribute sessions to:
+ *  explicit config → env → signed-in account → git (run in the hook's cwd,
+ *  which is why it's last: one human working across repos with different git
+ *  configs would otherwise split into several authors) → OS user. */
+export function resolveName(cfg: ClaudeLensConfig, account?: AccountIdentity): string {
   if (cfg.name?.trim()) return cfg.name.trim();
   if (process.env.CLAUDELENS_NAME?.trim()) return process.env.CLAUDELENS_NAME.trim();
+  if (account?.displayName?.trim()) return account.displayName.trim();
   try {
     const git = execFileSync('git', ['config', 'user.name'], { encoding: 'utf8' }).trim();
     if (git) return git;

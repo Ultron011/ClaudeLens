@@ -109,6 +109,30 @@ var init_redact = __esm({
 });
 
 // ../shared/src/parser.ts
+function summarizeToolArgs(name, input) {
+  if (!input) return void 0;
+  const fields = ARG_FIELDS[name];
+  const parts = [];
+  if (fields) {
+    for (const f of fields) {
+      const v = input[f];
+      if (v === void 0 || v === null) continue;
+      parts.push(String(v));
+    }
+  } else {
+    for (const [k, v] of Object.entries(input)) {
+      if (NEVER.test(k)) continue;
+      if (typeof v !== "string") continue;
+      parts.push(`${k}=${v}`);
+      break;
+    }
+  }
+  if (!parts.length) return void 0;
+  let joined = parts.join(" ").replace(/\s+/g, " ").trim();
+  if (!joined) return void 0;
+  if (joined.length > ARG_CAP) joined = joined.slice(0, ARG_CAP - 1) + "\u2026";
+  return redactText(joined).text;
+}
 function asBlocks(content) {
   if (!content) return [];
   if (typeof content === "string") return [{ type: "text", text: content }];
@@ -144,6 +168,8 @@ function parseTranscript(jsonl) {
   const skills = /* @__PURE__ */ new Set();
   const subagents = /* @__PURE__ */ new Set();
   const models = /* @__PURE__ */ new Set();
+  const modelUsage = {};
+  const daily = {};
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
@@ -156,26 +182,62 @@ function parseTranscript(jsonl) {
   let title = "";
   let firstUserPrompt;
   const timestamps = [];
+  const ensureModel = (m) => modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true };
+  const ensureDay = (d) => daily[d] ??= { turns: 0, userMessages: 0, totalTokens: 0, costUsd: 0, activeMs: 0 };
+  const isGenuineHumanTurn = (e) => !(e.origin?.kind && e.origin.kind !== "human") && e.promptSource !== "system" && e.isMeta !== true;
+  let userMessages = 0;
+  let currentMode;
+  const modeOrder = [];
+  const noteMode = (m) => {
+    currentMode = m;
+    if (!modeOrder.includes(m)) modeOrder.push(m);
+  };
+  const GAP_CAP_MS = 5 * 60 * 1e3;
+  let sawTurnDuration = false;
+  let lastAssistant;
+  const addActive = (ms) => {
+    sawTurnDuration = true;
+    if (!lastAssistant) return;
+    ensureModel(lastAssistant.model).activeMs += ms;
+    if (lastAssistant.day) ensureDay(lastAssistant.day).activeMs += ms;
+  };
   for (const e of entries) {
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
     if (e.gitBranch && !gitBranch) gitBranch = e.gitBranch;
     if (e.version && !version) version = e.version;
     if (e.type === "ai-title" && e.aiTitle) title = e.aiTitle;
+    if (e.type === "permission-mode") {
+      if (e.permissionMode) noteMode(e.permissionMode);
+      continue;
+    }
+    if (e.type === "system") {
+      if (e.subtype === "turn_duration" && typeof e.durationMs === "number") addActive(e.durationMs);
+      continue;
+    }
     if (e.type !== "user" && e.type !== "assistant") continue;
     const msg = e.message;
     if (!msg) continue;
+    if (e.type === "user" && e.permissionMode) noteMode(e.permissionMode);
     const blocks = asBlocks(msg.content);
     const model = msg.model ?? e.model;
     if (model) models.add(model);
     if (e.timestamp) timestamps.push(e.timestamp);
+    const day = e.timestamp?.slice(0, 10);
     if (e.type === "assistant" && msg.usage) {
       const u = msg.usage;
+      const turnTokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+      const turnCost = costForUsage(model, u);
       inputTokens += u.input_tokens ?? 0;
       outputTokens += u.output_tokens ?? 0;
       cacheReadTokens += u.cache_read_input_tokens ?? 0;
       cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-      estimatedCostUsd += costForUsage(model, u);
+      estimatedCostUsd += turnCost;
+      const mu = ensureModel(model ?? "(unknown)");
+      mu.totalTokens += turnTokens;
+      mu.costUsd += turnCost;
+      if (day) ensureDay(day).totalTokens += turnTokens;
+      if (day) ensureDay(day).costUsd += turnCost;
     }
     const textParts = [];
     const thinkingParts = [];
@@ -188,13 +250,21 @@ function parseTranscript(jsonl) {
         const detail = toolDetail(b.name, b.input);
         if (b.name === "Skill" && detail) skills.add(detail);
         if ((b.name === "Task" || b.name === "Agent") && detail) subagents.add(detail);
-        toolCalls.push({ name: b.name, detail });
+        toolCalls.push({ name: b.name, detail, args: summarizeToolArgs(b.name, b.input) });
       }
     }
     const rawText = textParts.join("\n\n").trim();
     const text = e.type === "user" ? cleanUserText(rawText) : rawText;
     if (e.type === "user" && !firstUserPrompt && text) firstUserPrompt = text;
     if (!text && !thinkingParts.length && !toolCalls.length) continue;
+    if (day) ensureDay(day).turns += 1;
+    if (e.type === "assistant") {
+      ensureModel(model ?? "(unknown)").turns += 1;
+      lastAssistant = { model: model ?? "(unknown)", day };
+    } else if (e.type === "user" && isGenuineHumanTurn(e)) {
+      userMessages += 1;
+      if (day) ensureDay(day).userMessages += 1;
+    }
     turns.push({
       role: e.type,
       timestamp: e.timestamp,
@@ -202,18 +272,33 @@ function parseTranscript(jsonl) {
       text,
       thinking: thinkingParts.length ? thinkingParts.join("\n\n") : void 0,
       toolCalls,
-      isSidechain: e.isSidechain
+      isSidechain: e.isSidechain,
+      permissionMode: currentMode
     });
+  }
+  const activeMsMeasured = sawTurnDuration;
+  if (!sawTurnDuration) {
+    let prevTs;
+    for (const t of turns) {
+      const ts = t.timestamp ? new Date(t.timestamp).getTime() : void 0;
+      if (t.role === "assistant" && ts !== void 0) {
+        const gap = prevTs !== void 0 ? Math.min(Math.max(ts - prevTs, 0), GAP_CAP_MS) : 0;
+        ensureModel(t.model ?? "(unknown)").activeMs += gap;
+        const day = t.timestamp?.slice(0, 10);
+        if (day) ensureDay(day).activeMs += gap;
+      }
+      if (ts !== void 0) prevTs = ts;
+    }
+    for (const mu of Object.values(modelUsage)) mu.measured = false;
   }
   timestamps.sort();
   const startedAt = timestamps[0];
   const endedAt = timestamps[timestamps.length - 1];
   const durationMs = startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : void 0;
-  const userTurns = turns.filter((t) => t.role === "user").length;
   const assistantTurns = turns.filter((t) => t.role === "assistant").length;
   const stats = {
     turns: turns.length,
-    userTurns,
+    userMessages,
     assistantTurns,
     inputTokens,
     outputTokens,
@@ -226,7 +311,12 @@ function parseTranscript(jsonl) {
     skills: [...skills],
     subagents: [...subagents],
     durationMs,
-    firstUserPrompt: firstUserPrompt?.slice(0, 500)
+    firstUserPrompt: firstUserPrompt?.slice(0, 500),
+    permissionModes: modeOrder,
+    usedAutoMode: modeOrder.includes("auto"),
+    modelUsage,
+    daily,
+    activeMsMeasured
   };
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;
   return {
@@ -239,14 +329,39 @@ function parseTranscript(jsonl) {
     startedAt,
     endedAt,
     stats,
-    turns
+    turns,
+    parserVersion: PARSER_VERSION
   };
 }
-var INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT;
+var PARSER_VERSION, ARG_CAP, ARG_FIELDS, NEVER, INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT;
 var init_parser = __esm({
   "../shared/src/parser.ts"() {
     "use strict";
     init_pricing();
+    init_redact();
+    PARSER_VERSION = 3;
+    ARG_CAP = 300;
+    ARG_FIELDS = {
+      Bash: ["command"],
+      BashOutput: ["bash_id"],
+      KillShell: ["shell_id"],
+      WebFetch: ["url"],
+      WebSearch: ["query"],
+      ToolSearch: ["query"],
+      Read: ["file_path"],
+      Write: ["file_path"],
+      Edit: ["file_path"],
+      MultiEdit: ["file_path"],
+      NotebookEdit: ["notebook_path", "file_path"],
+      Glob: ["pattern", "path"],
+      Grep: ["pattern", "path"],
+      Task: ["subagent_type", "description"],
+      Agent: ["subagent_type", "description"],
+      Skill: ["skill", "args"],
+      TodoWrite: [],
+      ExitPlanMode: []
+    };
+    NEVER = /^(content|contents|new_string|old_string|file_text|body|prompt|text|patch|diff|edits|todos|snippet|replace_all)$/i;
     INJECTED_TAG_NAME = "(?:system-reminder|user-prompt-submit-hook|(?:local-)?command-[a-z-]+|bash-[a-z-]+)";
     INJECTED_BLOCK = new RegExp(`<(${INJECTED_TAG_NAME})\\b[^>]*>[\\s\\S]*?</\\1>`, "g");
     INJECTED_TAG = new RegExp(`</?${INJECTED_TAG_NAME}\\b[^>]*>`, "g");
@@ -266,10 +381,15 @@ var init_src = __esm({
 });
 
 // src/config.ts
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, writeFile, rename } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join, resolve, sep, dirname, parse as parsePath } from "node:path";
+function migrateBackfilled(parsed) {
+  if (parsed.backfilled) return parsed.backfilled;
+  if (parsed.backfilledSessions) return Object.fromEntries(parsed.backfilledSessions.map((id) => [id, 0]));
+  return {};
+}
 async function loadConfig() {
   try {
     const raw = await readFile(CONFIG_PATH, "utf8");
@@ -282,7 +402,8 @@ async function loadConfig() {
       ignoreSessions: parsed.ignoreSessions ?? [],
       paused: parsed.paused ?? false,
       redact: parsed.redact ?? false,
-      backfilledSessions: parsed.backfilledSessions ?? []
+      backfilled: migrateBackfilled(parsed),
+      shareAccount: parsed.shareAccount
     };
   } catch {
     return {
@@ -293,14 +414,17 @@ async function loadConfig() {
   }
 }
 async function saveConfig(cfg) {
-  await writeFile(CONFIG_PATH, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+  const tmp = `${CONFIG_PATH}.tmp`;
+  await writeFile(tmp, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+  await rename(tmp, CONFIG_PATH);
 }
 function isConnected(cfg) {
   return Boolean(cfg.server);
 }
-function resolveName(cfg) {
+function resolveName(cfg, account) {
   if (cfg.name?.trim()) return cfg.name.trim();
   if (process.env.CLAUDELENS_NAME?.trim()) return process.env.CLAUDELENS_NAME.trim();
+  if (account?.displayName?.trim()) return account.displayName.trim();
   try {
     const git2 = execFileSync("git", ["config", "user.name"], { encoding: "utf8" }).trim();
     if (git2) return git2;
@@ -376,8 +500,42 @@ var init_config = __esm({
       ignoreSessions: [],
       paused: false,
       redact: false,
-      backfilledSessions: []
+      backfilled: {}
     };
+  }
+});
+
+// src/account.ts
+import { readFile as readFile2 } from "node:fs/promises";
+import { homedir as homedir2 } from "node:os";
+import { join as join2 } from "node:path";
+function configPath() {
+  return join2(process.env.CLAUDE_CONFIG_DIR || homedir2(), ".claude.json");
+}
+async function readAccount() {
+  if (hasCached) return cached;
+  try {
+    const raw = await readFile2(configPath(), "utf8");
+    const parsed = JSON.parse(raw);
+    const acc = parsed.oauthAccount;
+    if (!acc || typeof acc !== "object") return void 0;
+    const account = {
+      email: typeof acc.emailAddress === "string" ? acc.emailAddress : void 0,
+      displayName: typeof acc.displayName === "string" ? acc.displayName : void 0,
+      organizationName: typeof acc.organizationName === "string" ? acc.organizationName : void 0
+    };
+    cached = account;
+    hasCached = true;
+    return account;
+  } catch {
+    return void 0;
+  }
+}
+var cached, hasCached;
+var init_account = __esm({
+  "src/account.ts"() {
+    "use strict";
+    hasCached = false;
   }
 });
 
@@ -386,19 +544,19 @@ var sync_exports = {};
 __export(sync_exports, {
   runSync: () => runSync
 });
-import { readFile as readFile2 } from "node:fs/promises";
+import { readFile as readFile3 } from "node:fs/promises";
 async function readStdin() {
   const chunks = [];
   for await (const chunk of process.stdin) chunks.push(chunk);
   return Buffer.concat(chunks).toString("utf8");
 }
 async function readSettledSession(path) {
-  let session = parseTranscript(await readFile2(path, "utf8"));
+  let session = parseTranscript(await readFile3(path, "utf8"));
   for (let i = 0; i < 10; i++) {
     const last = session.turns[session.turns.length - 1];
     if (last && last.role === "assistant") break;
     await sleep(250);
-    session = parseTranscript(await readFile2(path, "utf8"));
+    session = parseTranscript(await readFile3(path, "utf8"));
   }
   return session;
 }
@@ -423,8 +581,9 @@ async function runSync() {
       session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
     }
   }
-  const payload = { session, author: resolveName(cfg) };
-  await fetch(`${cfg.server}/api/sessions`, {
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  const payload = { session, author: resolveName(cfg, account), account };
+  const res = await fetch(`${cfg.server}/api/sessions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
@@ -432,6 +591,17 @@ async function runSync() {
     },
     body: JSON.stringify(payload)
   });
+  if (!res.ok) return;
+  const body = await res.json().catch(() => void 0);
+  if (body?.ignored && body.untrack) {
+    if (body.untrack.sessionId && !cfg.ignoreSessions.includes(body.untrack.sessionId)) {
+      cfg.ignoreSessions.push(body.untrack.sessionId);
+      await saveConfig(cfg);
+    } else if (body.untrack.cwd && !cfg.ignoreProjects.includes(body.untrack.cwd)) {
+      cfg.ignoreProjects.push(body.untrack.cwd);
+      await saveConfig(cfg);
+    }
+  }
 }
 var sleep;
 var init_sync = __esm({
@@ -439,330 +609,26 @@ var init_sync = __esm({
     "use strict";
     init_src();
     init_config();
+    init_account();
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-  }
-});
-
-// src/connect.ts
-var connect_exports = {};
-__export(connect_exports, {
-  runConnect: () => runConnect
-});
-function parse(argv) {
-  const out = {};
-  const positionals = [];
-  for (let i = 0; i < argv.length; i++) {
-    const a = argv[i];
-    if (a === "--session") out.session = argv[++i];
-    else if (a === "--name") out.name = argv[++i];
-    else if (a === "--token") out.token = argv[++i];
-    else if (a === "--server") out.server = argv[++i];
-    else if (!a.startsWith("-")) positionals.push(a);
-  }
-  if (!out.server && positionals[0]) out.server = positionals[0];
-  if (!out.token && positionals[1]) out.token = positionals[1];
-  if (!out.name && positionals.length > 2) out.name = positionals.slice(2).join(" ");
-  return out;
-}
-async function runConnect() {
-  const args = parse(process.argv.slice(3));
-  if (!args.server) {
-    console.error("Usage: connect <server-url> <token> <your display name>");
-    process.exit(1);
-  }
-  const cfg = await loadConfig();
-  cfg.server = args.server.replace(/\/+$/, "");
-  if (args.token) cfg.token = args.token;
-  if (args.name) cfg.name = args.name;
-  if (args.session && !cfg.ignoreSessions.includes(args.session)) {
-    cfg.ignoreSessions.push(args.session);
-  }
-  await saveConfig(cfg);
-  console.log(`\u2714 Connected to ${cfg.server} as "${resolveName(cfg)}".`);
-  console.log("Tracking is now on for every project. This session is excluded so the token is never uploaded.");
-  console.log("Opt out anytime: /claudelens:untrack (this session), /claudelens:untrack-project, or /claudelens:pause.");
-}
-var init_connect = __esm({
-  "src/connect.ts"() {
-    "use strict";
-    init_config();
-  }
-});
-
-// src/optout.ts
-var optout_exports = {};
-__export(optout_exports, {
-  runPause: () => runPause,
-  runResume: () => runResume,
-  runTrackProject: () => runTrackProject,
-  runTrackSession: () => runTrackSession,
-  runUntrackProject: () => runUntrackProject,
-  runUntrackSession: () => runUntrackSession
-});
-import { readdir, readFile as readFile3, writeFile as writeFile2, unlink, stat } from "node:fs/promises";
-import { homedir as homedir2 } from "node:os";
-import { join as join2, resolve as resolve2 } from "node:path";
-function argFlag(name) {
-  return process.argv.slice(3).includes(name);
-}
-function positional() {
-  return process.argv.slice(3).find((a) => !a.startsWith("-"));
-}
-function positionalDir() {
-  const p = positional();
-  return resolve2(p && !p.startsWith("-") ? p : process.cwd());
-}
-async function resolveSessionId(explicit, cwd) {
-  const clean = explicit?.trim();
-  if (clean && !clean.includes("$") && !clean.includes("{")) return clean;
-  let dirs;
-  try {
-    dirs = await readdir(PROJECTS_DIR);
-  } catch {
-    return void 0;
-  }
-  let best;
-  for (const d of dirs) {
-    const full = join2(PROJECTS_DIR, d);
-    let files;
-    try {
-      files = (await readdir(full)).filter((f) => f.endsWith(".jsonl"));
-    } catch {
-      continue;
-    }
-    for (const f of files) {
-      const path = join2(full, f);
-      try {
-        const raw = await readFile3(path, "utf8");
-        let sid;
-        let matches = false;
-        let scanned = 0;
-        for (const line of raw.split("\n")) {
-          if (!line.trim() || ++scanned > 80) break;
-          try {
-            const e = JSON.parse(line);
-            if (e.sessionId && !sid) sid = e.sessionId;
-            if (e.cwd && resolve2(e.cwd) === resolve2(cwd)) matches = true;
-          } catch {
-          }
-        }
-        if (matches && sid) {
-          const { mtimeMs } = await stat(path);
-          if (!best || mtimeMs > best.mtime) best = { id: sid, mtime: mtimeMs };
-        }
-      } catch {
-      }
-    }
-  }
-  return best?.id;
-}
-async function runUntrackSession() {
-  const cfg = await loadConfig();
-  const id = await resolveSessionId(positional(), process.cwd());
-  if (!id) {
-    console.log("Could not identify this session yet (no transcript). Try again after your first message.");
-    return;
-  }
-  if (!cfg.ignoreSessions.includes(id)) {
-    cfg.ignoreSessions.push(id);
-    await saveConfig(cfg);
-  }
-  console.log(`\u2714 This session (${id.slice(0, 8)}) will not be tracked. Nothing from it is sent to the dashboard.`);
-}
-async function runTrackSession() {
-  const cfg = await loadConfig();
-  const id = await resolveSessionId(positional(), process.cwd());
-  if (id) {
-    cfg.ignoreSessions = cfg.ignoreSessions.filter((s) => s !== id);
-    await saveConfig(cfg);
-  }
-  console.log("\u2714 This session is tracked again (syncs from the next turn).");
-}
-async function runUntrackProject() {
-  const cfg = await loadConfig();
-  const dir = positionalDir();
-  const team = argFlag("--team") || argFlag("--shared");
-  if (!isExcludedLocally(dir, cfg)) {
-    cfg.ignoreProjects.push(dir);
-    await saveConfig(cfg);
-  }
-  if (team) {
-    await writeFile2(
-      join2(dir, REPO_MARKER),
-      "# ClaudeLens: this repo is never tracked, for anyone. Commit this file.\nignore: true\n",
-      "utf8"
-    );
-    console.log(`\u2714 Wrote ${REPO_MARKER} in ${pretty(dir)} \u2014 commit it to exclude this repo for the whole team.`);
-  } else {
-    console.log(`\u2714 This project (${pretty(dir)}) will not be tracked. Its sessions stop syncing immediately.`);
-  }
-}
-async function runTrackProject() {
-  const cfg = await loadConfig();
-  const dir = positionalDir();
-  const team = argFlag("--team") || argFlag("--shared");
-  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve2(p) !== dir);
-  await saveConfig(cfg);
-  if (team) {
-    try {
-      await unlink(join2(dir, REPO_MARKER));
-    } catch {
-    }
-  }
-  console.log(`\u2714 Tracking ${pretty(dir)} again.`);
-}
-async function setPaused(paused) {
-  const cfg = await loadConfig();
-  cfg.paused = paused;
-  await saveConfig(cfg);
-  console.log(
-    paused ? "\u23F8  Paused \u2014 nothing syncs on this machine until /claudelens:resume." : "\u25B6  Resumed \u2014 tracked projects sync again from the next turn."
-  );
-}
-var PROJECTS_DIR, pretty, runPause, runResume;
-var init_optout = __esm({
-  "src/optout.ts"() {
-    "use strict";
-    init_config();
-    PROJECTS_DIR = join2(homedir2(), ".claude", "projects");
-    pretty = (d) => d.replace(homedir2(), "~");
-    runPause = () => setPaused(true);
-    runResume = () => setPaused(false);
-  }
-});
-
-// src/status.ts
-var status_exports = {};
-__export(status_exports, {
-  runStatus: () => runStatus
-});
-import { resolve as resolve3 } from "node:path";
-import { homedir as homedir3 } from "node:os";
-async function runStatus() {
-  const cfg = await loadConfig();
-  const cwd = process.cwd();
-  if (!isConnected(cfg)) {
-    console.log("ClaudeLens is not connected yet.");
-    console.log("Run  /claudelens:connect <server-url> <token>  once to turn tracking on.");
-    return;
-  }
-  const repoOff = await isRepoExcluded(cwd);
-  const projOff = isExcludedLocally(cwd, cfg);
-  const globalOff = cfg.paused || envOptedOut();
-  const trackingHere = !globalOff && !projOff && !repoOff;
-  console.log("ClaudeLens");
-  console.log(`  Server    ${cfg.server}`);
-  console.log(`  Author    ${resolveName(cfg)}`);
-  console.log(`  Global    ${cfg.paused ? "PAUSED" : envOptedOut() ? "disabled by env (DO_NOT_TRACK)" : "on"}`);
-  console.log(`  This dir  ${cwd.replace(homedir3(), "~")}`);
-  console.log(
-    `            ${trackingHere ? "tracked \u2713" : repoOff ? "excluded by committed .claudelens (team-wide)" : projOff ? "excluded (you ran /claudelens:untrack-project)" : "not tracked (global pause/opt-out)"}`
-  );
-  if (cfg.ignoreProjects.length) {
-    console.log(`  Excluded projects (${cfg.ignoreProjects.length}):`);
-    for (const p of cfg.ignoreProjects) console.log(`    \xB7 ${resolve3(p).replace(homedir3(), "~")}`);
-  }
-  if (cfg.ignoreSessions.length) {
-    console.log(`  Excluded sessions: ${cfg.ignoreSessions.length}`);
-  }
-  try {
-    const r = await fetch(`${cfg.server}/api/health`, { signal: AbortSignal.timeout(3e3) });
-    console.log(`  Health    ${r.ok ? "reachable" : `HTTP ${r.status}`}`);
-  } catch {
-    console.log("  Health    unreachable");
-  }
-}
-var init_status = __esm({
-  "src/status.ts"() {
-    "use strict";
-    init_config();
-  }
-});
-
-// src/update.ts
-var update_exports = {};
-__export(update_exports, {
-  runUpdate: () => runUpdate
-});
-import { readFile as readFile4, cp } from "node:fs/promises";
-import { existsSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { homedir as homedir4 } from "node:os";
-import { join as join3, resolve as resolve4 } from "node:path";
-function git(args, cwd) {
-  return spawnSync("git", args, { cwd, stdio: "inherit" }).status === 0;
-}
-function runningRoot() {
-  const a = process.argv.slice(3);
-  const i = a.indexOf("--root");
-  const v = i >= 0 ? a[i + 1] : void 0;
-  if (v && !v.includes("$") && !v.includes("{")) return v;
-  return process.env.CLAUDE_PLUGIN_ROOT || void 0;
-}
-async function findMarketplace() {
-  try {
-    const raw = await readFile4(join3(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
-    const reg = JSON.parse(raw);
-    for (const entry of Object.values(reg)) {
-      const loc = entry.installLocation;
-      if (loc && existsSync(join3(loc, ".git")) && existsSync(join3(loc, "plugin", MARKER))) return loc;
-    }
-  } catch {
-  }
-  const guess = join3(PLUGINS_DIR, "marketplaces", "claudelens");
-  if (existsSync(join3(guess, ".git")) && existsSync(join3(guess, "plugin", MARKER))) return guess;
-  return void 0;
-}
-async function runUpdate() {
-  const mp = await findMarketplace();
-  if (!mp) {
-    console.log("Couldn't find the ClaudeLens marketplace checkout.");
-    console.log("Update via Claude Code:  /plugin  \u2192  update  (or re-add the marketplace).");
-    return;
-  }
-  console.log(`Pulling latest in ${mp} \u2026`);
-  if (!git(["-C", mp, "pull", "--ff-only"], mp)) {
-    console.log("git pull failed \u2014 resolve it in that checkout, then retry.");
-    return;
-  }
-  const src = join3(mp, "plugin");
-  const root = runningRoot();
-  if (!root || !existsSync(root)) {
-    console.log("\u2714 Latest fetched. Activate it with  /plugin  \u2192  update  (or restart Claude Code).");
-    return;
-  }
-  if (resolve4(src) === resolve4(root)) {
-    console.log("\u2714 Updated (running directly from the marketplace checkout).");
-    return;
-  }
-  for (const part of ["dist", "skills", "hooks", ".claude-plugin"]) {
-    const from = join3(src, part);
-    if (existsSync(from)) await cp(from, join3(root, part), { recursive: true, force: true });
-  }
-  console.log("\u2714 Updated \u2014 new code runs from the next turn.");
-  console.log("(If an update adds/removes slash commands, run /plugin \u2192 update too so the menu refreshes.)");
-}
-var PLUGINS_DIR, MARKER;
-var init_update = __esm({
-  "src/update.ts"() {
-    "use strict";
-    PLUGINS_DIR = join3(homedir4(), ".claude", "plugins");
-    MARKER = join3("dist", "claudelens.mjs");
   }
 });
 
 // src/history.ts
 var history_exports = {};
 __export(history_exports, {
+  backfillDirs: () => backfillDirs,
+  backfillProject: () => backfillProject,
+  listProjects: () => listProjects,
   runListProjects: () => runListProjects,
   runSyncHistory: () => runSyncHistory
 });
-import { readdir as readdir2, readFile as readFile5, stat as stat2 } from "node:fs/promises";
-import { homedir as homedir5 } from "node:os";
-import { join as join4 } from "node:path";
+import { readdir, readFile as readFile4, stat } from "node:fs/promises";
+import { homedir as homedir3 } from "node:os";
+import { join as join3, resolve as resolve2 } from "node:path";
 async function jsonlFiles(dir) {
   try {
-    return (await readdir2(dir)).filter((f) => f.endsWith(".jsonl"));
+    return (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
   } catch {
     return [];
   }
@@ -770,7 +636,7 @@ async function jsonlFiles(dir) {
 async function peek(path) {
   let raw;
   try {
-    raw = await readFile5(path, "utf8");
+    raw = await readFile4(path, "utf8");
   } catch {
     return {};
   }
@@ -794,23 +660,24 @@ async function listProjects() {
   const cfg = await loadConfig();
   let dirNames;
   try {
-    dirNames = (await readdir2(PROJECTS_DIR2, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    dirNames = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     return [];
   }
   const entries = [];
   for (const dir of dirNames) {
-    const full = join4(PROJECTS_DIR2, dir);
+    const full = join3(PROJECTS_DIR, dir);
     const files = await jsonlFiles(full);
     if (!files.length) continue;
     let cwd;
     let synced = 0;
     let lastMtime = 0;
     for (const f of files) {
-      const path = join4(full, f);
-      const [{ cwd: fileCwd, sessionId }, st] = await Promise.all([peek(path), stat2(path)]);
+      const path = join3(full, f);
+      const [{ cwd: fileCwd, sessionId }, st] = await Promise.all([peek(path), stat(path)]);
       cwd ??= fileCwd;
-      if (sessionId && cfg.backfilledSessions.includes(sessionId)) synced++;
+      const version = sessionId ? cfg.backfilled[sessionId] : void 0;
+      if (version !== void 0 && version >= PARSER_VERSION) synced++;
       if (st.mtimeMs > lastMtime) lastMtime = st.mtimeMs;
     }
     entries.push({
@@ -851,6 +718,76 @@ function selectDirs(all) {
   }
   return [...new Set(out)];
 }
+async function findProjectDir(cwd) {
+  const target = resolve2(cwd);
+  const entries = await listProjects();
+  return entries.find((e) => e.cwd && resolve2(e.cwd) === target)?.dir;
+}
+async function backfillOne(path, cfg, author, account, force, result) {
+  try {
+    const session = parseTranscript(await readFile4(path, "utf8"));
+    if (!session.sessionId || session.sessionId === "unknown" || session.stats.turns < 1) return;
+    const priorVersion = cfg.backfilled[session.sessionId];
+    const alreadyCurrent = priorVersion !== void 0 && priorVersion >= PARSER_VERSION;
+    if (!force && alreadyCurrent) {
+      result.skipped++;
+      return;
+    }
+    if (session.cwd && !await shouldSync(session.cwd, session.sessionId, cfg)) {
+      result.skipped++;
+      return;
+    }
+    if (cfg.redact) {
+      session.turns = redactDeep(session.turns).value;
+      if (session.stats.firstUserPrompt) {
+        session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
+      }
+    }
+    const payload = { session, author, account };
+    const res = await fetch(`${cfg.server}/api/sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
+      },
+      body: JSON.stringify(payload)
+    });
+    if (!res.ok) throw new Error(`server responded ${res.status}`);
+    if (priorVersion !== void 0 && priorVersion < PARSER_VERSION) result.upgraded++;
+    cfg.backfilled[session.sessionId] = PARSER_VERSION;
+    result.synced++;
+  } catch (err) {
+    result.failed++;
+    if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
+  }
+}
+async function backfillDirs(dirs, opts = {}) {
+  const result = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
+  const cfg = await loadConfig();
+  if (!isConnected(cfg)) return result;
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  const author = resolveName(cfg, account);
+  const concurrency = Math.max(1, opts.concurrency ?? 3);
+  for (const dir of dirs) {
+    const full = join3(PROJECTS_DIR, dir);
+    const files = (await jsonlFiles(full)).map((f) => join3(full, f));
+    result.scanned += files.length;
+    let next = 0;
+    const worker = async () => {
+      while (next < files.length) {
+        await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
+    await saveConfig(cfg);
+  }
+  return result;
+}
+async function backfillProject(cwd, opts = {}) {
+  const dir = await findProjectDir(cwd);
+  if (!dir) return { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
+  return backfillDirs([dir], opts);
+}
 async function runSyncHistory() {
   const cfg = await loadConfig();
   if (!isConnected(cfg)) {
@@ -864,59 +801,357 @@ async function runSyncHistory() {
     console.log("No matching projects selected. Pass indices or dir names from list-projects, or --all.");
     return;
   }
-  const author = resolveName(cfg);
-  let synced = 0;
-  let skipped = 0;
-  let failed = 0;
-  for (const dir of dirs) {
-    const full = join4(PROJECTS_DIR2, dir);
-    for (const f of await jsonlFiles(full)) {
-      const path = join4(full, f);
-      try {
-        const session = parseTranscript(await readFile5(path, "utf8"));
-        if (!session.sessionId || session.sessionId === "unknown" || session.stats.turns < 1) continue;
-        if (!force && cfg.backfilledSessions.includes(session.sessionId)) {
-          skipped++;
-          continue;
-        }
-        if (session.cwd && !await shouldSync(session.cwd, session.sessionId, cfg)) {
-          skipped++;
-          continue;
-        }
-        if (cfg.redact) {
-          session.turns = redactDeep(session.turns).value;
-          if (session.stats.firstUserPrompt) {
-            session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
-          }
-        }
-        const payload = { session, author };
-        const res = await fetch(`${cfg.server}/api/sessions`, {
-          method: "POST",
-          headers: {
-            "content-type": "application/json",
-            ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
-          },
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) throw new Error(`server responded ${res.status}`);
-        if (!cfg.backfilledSessions.includes(session.sessionId)) cfg.backfilledSessions.push(session.sessionId);
-        synced++;
-      } catch (err) {
-        failed++;
-        if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
-      }
-    }
-    await saveConfig(cfg);
-  }
-  console.log(`\u2714 Synced ${synced} session(s). Skipped ${skipped} (already synced or excluded). Failed ${failed}.`);
+  const { synced, skipped, failed, upgraded } = await backfillDirs(dirs, { force });
+  console.log(
+    `\u2714 Synced ${synced} session(s) (${upgraded} upgraded). Skipped ${skipped} (already synced or excluded). Failed ${failed}.`
+  );
 }
-var PROJECTS_DIR2;
+var PROJECTS_DIR;
 var init_history = __esm({
   "src/history.ts"() {
     "use strict";
     init_src();
     init_config();
-    PROJECTS_DIR2 = join4(homedir5(), ".claude", "projects");
+    init_account();
+    PROJECTS_DIR = join3(homedir3(), ".claude", "projects");
+  }
+});
+
+// src/connect.ts
+var connect_exports = {};
+__export(connect_exports, {
+  runConnect: () => runConnect
+});
+import { resolve as resolve3 } from "node:path";
+function parse(argv) {
+  const out = {};
+  const positionals = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--session") out.session = argv[++i];
+    else if (a === "--name") out.name = argv[++i];
+    else if (a === "--token") out.token = argv[++i];
+    else if (a === "--server") out.server = argv[++i];
+    else if (!a.startsWith("-")) positionals.push(a);
+  }
+  if (!out.server && positionals[0]) out.server = positionals[0];
+  if (!out.token && positionals[1]) out.token = positionals[1];
+  if (!out.name && positionals.length > 2) out.name = positionals.slice(2).join(" ");
+  return out;
+}
+async function runConnect() {
+  const args = parse(process.argv.slice(3));
+  if (!args.server) {
+    console.error("Usage: connect <server-url> <token> <your display name>");
+    process.exit(1);
+  }
+  const cfg = await loadConfig();
+  cfg.server = args.server.replace(/\/+$/, "");
+  if (args.token) cfg.token = args.token;
+  if (args.name) cfg.name = args.name;
+  if (args.session && !cfg.ignoreSessions.includes(args.session)) {
+    cfg.ignoreSessions.push(args.session);
+  }
+  await saveConfig(cfg);
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  console.log(`\u2714 Connected to ${cfg.server} as "${resolveName(cfg, account)}".`);
+  console.log("Tracking is now on for every project. This session is excluded so the token is never uploaded.");
+  console.log("Opt out anytime: /claudelens:untrack (this session), /claudelens:untrack-project, or /claudelens:pause.");
+  const cwd = process.cwd();
+  const { synced, upgraded, failed } = await backfillProject(cwd);
+  if (synced || failed) {
+    console.log(`Backed up ${synced} past session(s) here (${upgraded} upgraded, ${failed} failed).`);
+  }
+  const others = (await listProjects()).filter((p) => p.cwd && resolve3(p.cwd) !== resolve3(cwd) && p.sessions > 0);
+  if (others.length) {
+    console.log(
+      `Found ${others.length} other project(s) with history \u2014 run /claudelens:sync-history to back those up.`
+    );
+  }
+}
+var init_connect = __esm({
+  "src/connect.ts"() {
+    "use strict";
+    init_config();
+    init_account();
+    init_history();
+  }
+});
+
+// src/optout.ts
+var optout_exports = {};
+__export(optout_exports, {
+  runPause: () => runPause,
+  runResume: () => runResume,
+  runTrackProject: () => runTrackProject,
+  runTrackSession: () => runTrackSession,
+  runUntrackProject: () => runUntrackProject,
+  runUntrackSession: () => runUntrackSession
+});
+import { readdir as readdir2, readFile as readFile5, writeFile as writeFile2, unlink, stat as stat2 } from "node:fs/promises";
+import { homedir as homedir4 } from "node:os";
+import { join as join4, resolve as resolve4 } from "node:path";
+function argFlag(name) {
+  return process.argv.slice(3).includes(name);
+}
+function positional() {
+  return process.argv.slice(3).find((a) => !a.startsWith("-"));
+}
+function positionalDir() {
+  const p = positional();
+  return resolve4(p && !p.startsWith("-") ? p : process.cwd());
+}
+async function resolveSessionId(explicit, cwd) {
+  const clean = explicit?.trim();
+  if (clean && !clean.includes("$") && !clean.includes("{")) return clean;
+  let dirs;
+  try {
+    dirs = await readdir2(PROJECTS_DIR2);
+  } catch {
+    return void 0;
+  }
+  let best;
+  for (const d of dirs) {
+    const full = join4(PROJECTS_DIR2, d);
+    let files;
+    try {
+      files = (await readdir2(full)).filter((f) => f.endsWith(".jsonl"));
+    } catch {
+      continue;
+    }
+    for (const f of files) {
+      const path = join4(full, f);
+      try {
+        const raw = await readFile5(path, "utf8");
+        let sid;
+        let matches = false;
+        let scanned = 0;
+        for (const line of raw.split("\n")) {
+          if (!line.trim() || ++scanned > 80) break;
+          try {
+            const e = JSON.parse(line);
+            if (e.sessionId && !sid) sid = e.sessionId;
+            if (e.cwd && resolve4(e.cwd) === resolve4(cwd)) matches = true;
+          } catch {
+          }
+        }
+        if (matches && sid) {
+          const { mtimeMs } = await stat2(path);
+          if (!best || mtimeMs > best.mtime) best = { id: sid, mtime: mtimeMs };
+        }
+      } catch {
+      }
+    }
+  }
+  return best?.id;
+}
+async function runUntrackSession() {
+  const cfg = await loadConfig();
+  const id = await resolveSessionId(positional(), process.cwd());
+  if (!id) {
+    console.log("Could not identify this session yet (no transcript). Try again after your first message.");
+    return;
+  }
+  if (!cfg.ignoreSessions.includes(id)) {
+    cfg.ignoreSessions.push(id);
+    await saveConfig(cfg);
+  }
+  console.log(`\u2714 This session (${id.slice(0, 8)}) will not be tracked. Nothing from it is sent to the dashboard.`);
+}
+async function runTrackSession() {
+  const cfg = await loadConfig();
+  const id = await resolveSessionId(positional(), process.cwd());
+  if (id) {
+    cfg.ignoreSessions = cfg.ignoreSessions.filter((s) => s !== id);
+    await saveConfig(cfg);
+  }
+  console.log("\u2714 This session is tracked again (syncs from the next turn).");
+}
+async function runUntrackProject() {
+  const cfg = await loadConfig();
+  const dir = positionalDir();
+  const team = argFlag("--team") || argFlag("--shared");
+  if (!isExcludedLocally(dir, cfg)) {
+    cfg.ignoreProjects.push(dir);
+    await saveConfig(cfg);
+  }
+  if (team) {
+    await writeFile2(
+      join4(dir, REPO_MARKER),
+      "# ClaudeLens: this repo is never tracked, for anyone. Commit this file.\nignore: true\n",
+      "utf8"
+    );
+    console.log(`\u2714 Wrote ${REPO_MARKER} in ${pretty(dir)} \u2014 commit it to exclude this repo for the whole team.`);
+  } else {
+    console.log(`\u2714 This project (${pretty(dir)}) will not be tracked. Its sessions stop syncing immediately.`);
+  }
+}
+async function runTrackProject() {
+  const cfg = await loadConfig();
+  const dir = positionalDir();
+  const team = argFlag("--team") || argFlag("--shared");
+  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve4(p) !== dir);
+  await saveConfig(cfg);
+  if (team) {
+    try {
+      await unlink(join4(dir, REPO_MARKER));
+    } catch {
+    }
+  }
+  const { synced, upgraded, failed } = await backfillProject(dir);
+  console.log(
+    `\u2714 Tracking ${pretty(dir)} again. Backed up ${synced} past session(s) (${upgraded} upgraded, ${failed} failed).`
+  );
+}
+async function setPaused(paused) {
+  const cfg = await loadConfig();
+  cfg.paused = paused;
+  await saveConfig(cfg);
+  console.log(
+    paused ? "\u23F8  Paused \u2014 nothing syncs on this machine until /claudelens:resume." : "\u25B6  Resumed \u2014 tracked projects sync again from the next turn."
+  );
+}
+var PROJECTS_DIR2, pretty, runPause, runResume;
+var init_optout = __esm({
+  "src/optout.ts"() {
+    "use strict";
+    init_config();
+    init_history();
+    PROJECTS_DIR2 = join4(homedir4(), ".claude", "projects");
+    pretty = (d) => d.replace(homedir4(), "~");
+    runPause = () => setPaused(true);
+    runResume = () => setPaused(false);
+  }
+});
+
+// src/status.ts
+var status_exports = {};
+__export(status_exports, {
+  runStatus: () => runStatus
+});
+import { resolve as resolve5 } from "node:path";
+import { homedir as homedir5 } from "node:os";
+async function runStatus() {
+  const cfg = await loadConfig();
+  const cwd = process.cwd();
+  if (!isConnected(cfg)) {
+    console.log("ClaudeLens is not connected yet.");
+    console.log("Run  /claudelens:connect <server-url> <token>  once to turn tracking on.");
+    return;
+  }
+  const repoOff = await isRepoExcluded(cwd);
+  const projOff = isExcludedLocally(cwd, cfg);
+  const globalOff = cfg.paused || envOptedOut();
+  const trackingHere = !globalOff && !projOff && !repoOff;
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  console.log("ClaudeLens");
+  console.log(`  Server    ${cfg.server}`);
+  console.log(`  Author    ${resolveName(cfg, account)}`);
+  if (account) {
+    console.log(`  Account   ${account.email ?? "(no email)"}${account.organizationName ? ` \xB7 ${account.organizationName}` : ""}`);
+  } else if (cfg.shareAccount === false) {
+    console.log("  Account   not shared (shareAccount: false)");
+  } else {
+    console.log("  Account   unavailable (could not read ~/.claude.json)");
+  }
+  console.log(`  Parser    v${PARSER_VERSION} (local)`);
+  console.log(`  Global    ${cfg.paused ? "PAUSED" : envOptedOut() ? "disabled by env (DO_NOT_TRACK)" : "on"}`);
+  console.log(`  This dir  ${cwd.replace(homedir5(), "~")}`);
+  console.log(
+    `            ${trackingHere ? "tracked \u2713" : repoOff ? "excluded by committed .claudelens (team-wide)" : projOff ? "excluded (you ran /claudelens:untrack-project)" : "not tracked (global pause/opt-out)"}`
+  );
+  if (cfg.ignoreProjects.length) {
+    console.log(`  Excluded projects (${cfg.ignoreProjects.length}):`);
+    for (const p of cfg.ignoreProjects) console.log(`    \xB7 ${resolve5(p).replace(homedir5(), "~")}`);
+  }
+  if (cfg.ignoreSessions.length) {
+    console.log(`  Excluded sessions: ${cfg.ignoreSessions.length}`);
+  }
+  try {
+    const r = await fetch(`${cfg.server}/api/health`, { signal: AbortSignal.timeout(3e3) });
+    console.log(`  Health    ${r.ok ? "reachable" : `HTTP ${r.status}`}`);
+  } catch {
+    console.log("  Health    unreachable");
+  }
+}
+var init_status = __esm({
+  "src/status.ts"() {
+    "use strict";
+    init_src();
+    init_config();
+    init_account();
+  }
+});
+
+// src/update.ts
+var update_exports = {};
+__export(update_exports, {
+  runUpdate: () => runUpdate
+});
+import { readFile as readFile6, cp } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { homedir as homedir6 } from "node:os";
+import { join as join5, resolve as resolve6 } from "node:path";
+function git(args, cwd) {
+  return spawnSync("git", args, { cwd, stdio: "inherit" }).status === 0;
+}
+function runningRoot() {
+  const a = process.argv.slice(3);
+  const i = a.indexOf("--root");
+  const v = i >= 0 ? a[i + 1] : void 0;
+  if (v && !v.includes("$") && !v.includes("{")) return v;
+  return process.env.CLAUDE_PLUGIN_ROOT || void 0;
+}
+async function findMarketplace() {
+  try {
+    const raw = await readFile6(join5(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
+    const reg = JSON.parse(raw);
+    for (const entry of Object.values(reg)) {
+      const loc = entry.installLocation;
+      if (loc && existsSync(join5(loc, ".git")) && existsSync(join5(loc, "plugin", MARKER))) return loc;
+    }
+  } catch {
+  }
+  const guess = join5(PLUGINS_DIR, "marketplaces", "claudelens");
+  if (existsSync(join5(guess, ".git")) && existsSync(join5(guess, "plugin", MARKER))) return guess;
+  return void 0;
+}
+async function runUpdate() {
+  const mp = await findMarketplace();
+  if (!mp) {
+    console.log("Couldn't find the ClaudeLens marketplace checkout.");
+    console.log("Update via Claude Code:  /plugin  \u2192  update  (or re-add the marketplace).");
+    return;
+  }
+  console.log(`Pulling latest in ${mp} \u2026`);
+  if (!git(["-C", mp, "pull", "--ff-only"], mp)) {
+    console.log("git pull failed \u2014 resolve it in that checkout, then retry.");
+    return;
+  }
+  const src = join5(mp, "plugin");
+  const root = runningRoot();
+  if (!root || !existsSync(root)) {
+    console.log("\u2714 Latest fetched. Activate it with  /plugin  \u2192  update  (or restart Claude Code).");
+    return;
+  }
+  if (resolve6(src) === resolve6(root)) {
+    console.log("\u2714 Updated (running directly from the marketplace checkout).");
+    return;
+  }
+  for (const part of ["dist", "skills", "hooks", ".claude-plugin"]) {
+    const from = join5(src, part);
+    if (existsSync(from)) await cp(from, join5(root, part), { recursive: true, force: true });
+  }
+  console.log("\u2714 Updated \u2014 new code runs from the next turn.");
+  console.log("(If an update adds/removes slash commands, run /plugin \u2192 update too so the menu refreshes.)");
+}
+var PLUGINS_DIR, MARKER;
+var init_update = __esm({
+  "src/update.ts"() {
+    "use strict";
+    PLUGINS_DIR = join5(homedir6(), ".claude", "plugins");
+    MARKER = join5("dist", "claudelens.mjs");
   }
 });
 

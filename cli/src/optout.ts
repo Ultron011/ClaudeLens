@@ -10,6 +10,7 @@ import { readdir, readFile, writeFile, unlink, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { loadConfig, saveConfig, isExcludedLocally, REPO_MARKER } from './config.js';
+import { backfillProject } from './history.js';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 const pretty = (d: string) => d.replace(homedir(), '~');
@@ -137,7 +138,13 @@ export async function runTrackProject(): Promise<void> {
       /* nothing to remove */
     }
   }
-  console.log(`✔ Tracking ${pretty(dir)} again.`);
+
+  // Re-enabling a project now backs up its past history automatically, so a
+  // project that was excluded before it ever synced doesn't stay dark forever.
+  const { synced, upgraded, failed } = await backfillProject(dir);
+  console.log(
+    `✔ Tracking ${pretty(dir)} again. Backed up ${synced} past session(s) (${upgraded} upgraded, ${failed} failed).`,
+  );
 }
 
 async function setPaused(paused: boolean): Promise<void> {

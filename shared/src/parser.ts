@@ -2,13 +2,85 @@
 // learning-oriented stats. Tolerant of unknown line types and format drift.
 import type {
   ContentBlock,
+  DailyStats,
+  ModelUsage,
   ParsedSession,
+  PermissionMode,
   RawEntry,
   SessionStats,
   ToolCall,
   Turn,
 } from './types.js';
 import { costForUsage } from './pricing.js';
+import { redactText } from './redact.js';
+
+/** Backfill ledger key: bump this when the parser's output shape changes so old sessions
+ *  auto-re-sync instead of being skipped forever. */
+export const PARSER_VERSION = 3;
+
+const ARG_CAP = 300;
+
+/** The one-or-two input fields that identify an invocation. `[]` = explicit opt-out.
+ *  Unlisted tools fall through to the generic first-string rule. */
+const ARG_FIELDS: Record<string, string[]> = {
+  Bash: ['command'],
+  BashOutput: ['bash_id'],
+  KillShell: ['shell_id'],
+  WebFetch: ['url'],
+  WebSearch: ['query'],
+  ToolSearch: ['query'],
+  Read: ['file_path'],
+  Write: ['file_path'],
+  Edit: ['file_path'],
+  MultiEdit: ['file_path'],
+  NotebookEdit: ['notebook_path', 'file_path'],
+  Glob: ['pattern', 'path'],
+  Grep: ['pattern', 'path'],
+  Task: ['subagent_type', 'description'],
+  Agent: ['subagent_type', 'description'],
+  Skill: ['skill', 'args'],
+  TodoWrite: [],
+  ExitPlanMode: [],
+};
+
+/** Fields that are (or can be) file bodies, diffs, or whole prompts. Never summarized, not even
+ *  under the generic rule. */
+const NEVER =
+  /^(content|contents|new_string|old_string|file_text|body|prompt|text|patch|diff|edits|todos|snippet|replace_all)$/i;
+
+/** Bounded, single-line, ALWAYS-redacted summary of a tool invocation. Redaction is unconditional
+ *  here (not gated on cfg.redact) because these strings are command lines — the single most likely
+ *  place for a secret. */
+export function summarizeToolArgs(
+  name: string,
+  input?: Record<string, unknown>,
+): string | undefined {
+  if (!input) return undefined;
+  const fields = ARG_FIELDS[name];
+  const parts: string[] = [];
+  if (fields) {
+    // Known tool: emit the bare value. The tool name already says what the field is, so
+    // "Bash · cat foo" beats "Bash · command=cat foo" — the point is to read the command.
+    for (const f of fields) {
+      const v = input[f];
+      if (v === undefined || v === null) continue;
+      parts.push(String(v));
+    }
+  } else {
+    // Unknown / MCP tool: keep the key, since nothing else tells you what the value means.
+    for (const [k, v] of Object.entries(input)) {
+      if (NEVER.test(k)) continue;
+      if (typeof v !== 'string') continue;
+      parts.push(`${k}=${v}`);
+      break;
+    }
+  }
+  if (!parts.length) return undefined;
+  let joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+  if (!joined) return undefined;
+  if (joined.length > ARG_CAP) joined = joined.slice(0, ARG_CAP - 1) + '…';
+  return redactText(joined).text;
+}
 
 function asBlocks(content: string | ContentBlock[] | undefined): ContentBlock[] {
   if (!content) return [];
@@ -71,6 +143,8 @@ export function parseTranscript(jsonl: string): ParsedSession {
   const skills = new Set<string>();
   const subagents = new Set<string>();
   const models = new Set<string>();
+  const modelUsage: Record<string, ModelUsage> = {};
+  const daily: Record<string, DailyStats> = {};
 
   let inputTokens = 0;
   let outputTokens = 0;
@@ -86,6 +160,42 @@ export function parseTranscript(jsonl: string): ParsedSession {
   let firstUserPrompt: string | undefined;
   const timestamps: string[] = [];
 
+  const ensureModel = (m: string): ModelUsage =>
+    (modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true });
+  const ensureDay = (d: string): DailyStats =>
+    (daily[d] ??= { turns: 0, userMessages: 0, totalTokens: 0, costUsd: 0, activeMs: 0 });
+
+  // A `type:"user"` line isn't always something a person typed: Claude Code also injects
+  // task-notification-style origins, `promptSource:"system"` prompts, and meta lines. All three
+  // are excluded from `userMessages`; `suggestion_accepted` stays IN — the human did accept it.
+  const isGenuineHumanTurn = (e: RawEntry): boolean =>
+    !(e.origin?.kind && e.origin.kind !== 'human') &&
+    e.promptSource !== 'system' &&
+    e.isMeta !== true;
+  let userMessages = 0;
+
+  // Permission-mode timeline. `permission-mode` lines carry no timestamp, so file order is the
+  // only signal — a `user` line's own `permissionMode` (set only on a human-typed prompt) is the
+  // authoritative per-turn sample; the dedicated lines just seed state at session start/resume.
+  let currentMode: PermissionMode | undefined;
+  const modeOrder: PermissionMode[] = [];
+  const noteMode = (m: PermissionMode) => {
+    currentMode = m;
+    if (!modeOrder.includes(m)) modeOrder.push(m);
+  };
+
+  // ponytail: a turn_duration is credited whole to the most recent assistant turn's model. A turn
+  // that switched models mid-flight misattributes; split by output-token weight if that ever matters.
+  const GAP_CAP_MS = 5 * 60 * 1000;
+  let sawTurnDuration = false;
+  let lastAssistant: { model: string; day?: string } | undefined;
+  const addActive = (ms: number) => {
+    sawTurnDuration = true;
+    if (!lastAssistant) return;
+    ensureModel(lastAssistant.model).activeMs += ms;
+    if (lastAssistant.day) ensureDay(lastAssistant.day).activeMs += ms;
+  };
+
   for (const e of entries) {
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
@@ -93,23 +203,48 @@ export function parseTranscript(jsonl: string): ParsedSession {
     if (e.version && !version) version = e.version;
     if (e.type === 'ai-title' && e.aiTitle) title = e.aiTitle;
 
+    // Side channels: state lines Claude Code writes between turns. Not conversation turns, so
+    // they never reach `turns` — read for metadata, then skipped by the guard below.
+    if (e.type === 'permission-mode') {
+      if (e.permissionMode) noteMode(e.permissionMode);
+      continue;
+    }
+    if (e.type === 'system') {
+      if (e.subtype === 'turn_duration' && typeof e.durationMs === 'number') addActive(e.durationMs);
+      continue;
+    }
     if (e.type !== 'user' && e.type !== 'assistant') continue;
     const msg = e.message;
     if (!msg) continue;
+
+    if (e.type === 'user' && e.permissionMode) noteMode(e.permissionMode);
 
     const blocks = asBlocks(msg.content);
     const model = msg.model ?? e.model;
     if (model) models.add(model);
     if (e.timestamp) timestamps.push(e.timestamp);
+    const day = e.timestamp?.slice(0, 10);
 
     // token accounting (assistant turns carry usage)
     if (e.type === 'assistant' && msg.usage) {
       const u = msg.usage;
+      const turnTokens =
+        (u.input_tokens ?? 0) +
+        (u.output_tokens ?? 0) +
+        (u.cache_read_input_tokens ?? 0) +
+        (u.cache_creation_input_tokens ?? 0);
+      const turnCost = costForUsage(model, u);
       inputTokens += u.input_tokens ?? 0;
       outputTokens += u.output_tokens ?? 0;
       cacheReadTokens += u.cache_read_input_tokens ?? 0;
       cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-      estimatedCostUsd += costForUsage(model, u);
+      estimatedCostUsd += turnCost;
+
+      const mu = ensureModel(model ?? '(unknown)');
+      mu.totalTokens += turnTokens;
+      mu.costUsd += turnCost;
+      if (day) ensureDay(day).totalTokens += turnTokens;
+      if (day) ensureDay(day).costUsd += turnCost;
     }
 
     const textParts: string[] = [];
@@ -124,7 +259,7 @@ export function parseTranscript(jsonl: string): ParsedSession {
         const detail = toolDetail(b.name, b.input);
         if (b.name === 'Skill' && detail) skills.add(detail);
         if ((b.name === 'Task' || b.name === 'Agent') && detail) subagents.add(detail);
-        toolCalls.push({ name: b.name, detail });
+        toolCalls.push({ name: b.name, detail, args: summarizeToolArgs(b.name, b.input) });
       }
       // tool_result blocks (in user turns) are omitted from the rendered body
     }
@@ -140,6 +275,15 @@ export function parseTranscript(jsonl: string): ParsedSession {
     // nothing but injected system content.
     if (!text && !thinkingParts.length && !toolCalls.length) continue;
 
+    if (day) ensureDay(day).turns += 1;
+    if (e.type === 'assistant') {
+      ensureModel(model ?? '(unknown)').turns += 1;
+      lastAssistant = { model: model ?? '(unknown)', day };
+    } else if (e.type === 'user' && isGenuineHumanTurn(e)) {
+      userMessages += 1;
+      if (day) ensureDay(day).userMessages += 1;
+    }
+
     turns.push({
       role: e.type,
       timestamp: e.timestamp,
@@ -148,7 +292,30 @@ export function parseTranscript(jsonl: string): ParsedSession {
       thinking: thinkingParts.length ? thinkingParts.join('\n\n') : undefined,
       toolCalls,
       isSidechain: e.isSidechain,
+      permissionMode: currentMode,
     });
+  }
+
+  // Fallback active-time: only when no turn_duration line existed anywhere in the transcript
+  // (older Claude Code versions). Never mixed with measured data, so a session's numbers stay
+  // internally consistent. This measures *latency* between turns, not real work time, and is
+  // systematically smaller than turn_duration — never chart measured and fallback sessions in one
+  // series without the `measured` flag.
+  const activeMsMeasured = sawTurnDuration;
+  if (!sawTurnDuration) {
+    let prevTs: number | undefined;
+    for (const t of turns) {
+      const ts = t.timestamp ? new Date(t.timestamp).getTime() : undefined;
+      if (t.role === 'assistant' && ts !== undefined) {
+        const gap = prevTs !== undefined ? Math.min(Math.max(ts - prevTs, 0), GAP_CAP_MS) : 0;
+        ensureModel(t.model ?? '(unknown)').activeMs += gap;
+        const day = t.timestamp?.slice(0, 10);
+        if (day) ensureDay(day).activeMs += gap;
+      }
+      if (ts !== undefined) prevTs = ts;
+    }
+    // Never mixed with measured data (invariant above), so every model in this session is fallback.
+    for (const mu of Object.values(modelUsage)) mu.measured = false;
   }
 
   timestamps.sort();
@@ -157,12 +324,11 @@ export function parseTranscript(jsonl: string): ParsedSession {
   const durationMs =
     startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : undefined;
 
-  const userTurns = turns.filter((t) => t.role === 'user').length;
   const assistantTurns = turns.filter((t) => t.role === 'assistant').length;
 
   const stats: SessionStats = {
     turns: turns.length,
-    userTurns,
+    userMessages,
     assistantTurns,
     inputTokens,
     outputTokens,
@@ -176,6 +342,11 @@ export function parseTranscript(jsonl: string): ParsedSession {
     subagents: [...subagents],
     durationMs,
     firstUserPrompt: firstUserPrompt?.slice(0, 500),
+    permissionModes: modeOrder,
+    usedAutoMode: modeOrder.includes('auto'),
+    modelUsage,
+    daily,
+    activeMsMeasured,
   };
 
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;
@@ -191,5 +362,6 @@ export function parseTranscript(jsonl: string): ParsedSession {
     endedAt,
     stats,
     turns,
+    parserVersion: PARSER_VERSION,
   };
 }
