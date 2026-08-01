@@ -1,10 +1,9 @@
 /* ClaudeLens design tokens + core surfaces.
  *
- * NOTE ON IDENTITY: PRODUCT.md §5 still reads "dark surface + Claude-ember accent are committed
- * brand". That is now STALE — the user directed the palette to follow the pinned dribbble
- * references instead (references/dribble-ref-01..04), which moved the app to a light ground with
- * a deep emerald accent. The build is correct; PRODUCT.md §5 needs updating to match. Don't
- * "restore" the ember from that line.
+ * IDENTITY: light grey-green ground, white cards, one deep emerald accent — committed brand, per
+ * PRODUCT.md principle 5 and the pinned references (references/dribble-ref-01..04). An earlier
+ * build was dark with a warm "Claude ember" accent; that was superseded, and PRODUCT.md records
+ * the reversal. Don't reintroduce the ember, and don't add a fourth hue — see DESIGN.md.
  *
  * Feature-scoped rules (dialog, tables, charts) live in styles.extra.css, imported second. */
 

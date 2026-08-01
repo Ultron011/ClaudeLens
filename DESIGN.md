@@ -90,9 +90,9 @@ The world: a soft green-tinted grey page with **white cards that lift on a shado
 and one deep emerald for selection and the primary metric. Derived from the pinned references
 `references/dribble-ref-01` and `-02`.
 
-> **PRODUCT.md §5 is stale.** It still says "dark surface + Claude-ember accent are committed
-> brand". The user superseded that mid-build, directing the palette to the dribbble references.
-> The light emerald world below is correct. Update PRODUCT.md; do not restore the ember.
+`PRODUCT.md` records the same commitment (principle 5) and keeps the superseded "dark surface +
+Claude-ember" wording visible as a recorded reversal, so the change reads as a decision rather than
+as drift.
 
 ## Colors
 
@@ -461,13 +461,10 @@ single flash. Every animation has a still alternative; none is left running.
 
 ## Divergences From the Stated Direction
 
-1. **`PRODUCT.md §5` and `web/index.html`'s direction contract both described the dark ember
-   world.** `index.html` has been updated; **PRODUCT.md has not** and still asserts dark + ember as
-   committed brand. It should be corrected to record the light emerald world as the commitment.
-2. **The ramp is six reachable slots, not eight.** `palette.ts` sets `MAX_SLOTS = 6`; `--series-7`
+1. **The ramp is six reachable slots, not eight.** `palette.ts` sets `MAX_SLOTS = 6`; `--series-7`
    and `--series-8` are declared but unreachable.
-3. **`AccountLine.tsx` still uses the `✉` glyph** rather than an authored icon.
-4. **`--success` is an alias of `--accent`** and is currently unused, as are `--r-xl` and
+2. **`AccountLine.tsx` still uses the `✉` glyph** rather than an authored icon.
+3. **`--success` is an alias of `--accent`** and is currently unused, as are `--r-xl` and
    `--radius` (a legacy alias). Declared for completeness rather than in service of a rule.
-5. **Project and User totals reflect only the sessions loaded so far** once "Load more" is in play —
+4. **Project and User totals reflect only the sessions loaded so far** once "Load more" is in play —
    surfaced as a data caveat in the KPI `foot` ("loaded so far"), not a visual divergence.
