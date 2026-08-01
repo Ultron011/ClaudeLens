@@ -16,7 +16,7 @@ import { redactText } from './redact.js';
 
 /** Backfill ledger key: bump this when the parser's output shape changes so old sessions
  *  auto-re-sync instead of being skipped forever. */
-export const PARSER_VERSION = 3;
+export const PARSER_VERSION = 4;
 
 const ARG_CAP = 300;
 
