@@ -1,6 +1,8 @@
 # Gotchas — reusable landmines
 
-Five real bugs hit during the build of identity/auto-mode/analytics, plus near-misses and environment traps. Each bug entry is symptom → root cause → fix → how to avoid, so the "how to avoid" is a rule you can apply elsewhere in this codebase, not a reminder to "be careful."
+Real bugs hit during the build of identity/auto-mode/analytics and the dashboard redesign, plus near-misses and environment traps. Each bug entry is symptom → root cause → fix → how to avoid, so the "how to avoid" is a rule you can apply elsewhere in this codebase, not a reminder to "be careful."
+
+Entries 4 (the `overflow: hidden` reprise), 5 and 8 are the CSS ones — read all three before touching `web/src/styles*.css` or `Chart.tsx`.
 
 ## 1. Unreferenced bound Postgres parameter → 500 on `/api/analytics`
 
@@ -46,15 +48,41 @@ Delete the ternary that omitted the clause — always emit it, let the `IS NULL`
 
 **How to avoid**: before adding `overflow-x`/`overflow-y: auto|scroll` to any ancestor of a `position: sticky` element, ask whether that ancestor is the box the user will actually scroll. If it isn't (the page itself scrolls), the sticky element's containing block just became wrong. Never pair `border-collapse: collapse` with a sticky `<th>`.
 
+**Reprise — `overflow: hidden` is the same bug wearing a different hat.** During the dashboard redesign this was re-introduced within the hour, by adding `overflow: hidden` to `.table-scroll` for the innocuous-looking reason of *clipping the table's corners to the wrapper's `border-radius`*. `hidden` is just as non-`visible` as `auto`: the wrapper became the sticky `<thead>`'s containing block, and because the header also carries `top: var(--topbar-h)`, it pinned **60px below the table's own top edge** — painting over the entire first body row on every table in the app. The symptom reads like a z-index or a duplicated-row bug, which is why it costs time.
+
+Round corners on a table without clipping by setting `border-radius` on the four **corner cells** instead of the wrapper:
+```css
+.data-table thead tr:first-child th:first-child { border-top-left-radius: var(--r-lg); }
+.data-table thead tr:first-child th:last-child  { border-top-right-radius: var(--r-lg); }
+.data-table tbody tr:last-child  td:first-child { border-bottom-left-radius: var(--r-lg); }
+.data-table tbody tr:last-child  td:last-child  { border-bottom-right-radius: var(--r-lg); }
+```
+The rule to internalise: **any** non-`visible` overflow value — `hidden`, `clip`, `auto`, `scroll` — on an ancestor re-parents sticky descendants. "I only need it for the border radius" is not an exemption.
+
 ## 5. CSS grid item overflow — `min-width: auto` forces the whole page to scroll horizontally
 
-**Symptom**: adding a wide `DataTable` inside `.layout > .content` (a CSS grid track) made the entire page scroll horizontally, not just the table.
+**Symptom**: adding a wide `DataTable` inside a CSS grid track made the entire page scroll horizontally, not just the table. (The track was `.layout > .content` pre-redesign; the equivalent tracks now are `.app-main`, `.page` and every `.bento > *` — the rule is unchanged, only the selector names moved.)
 
 **Root cause**: a grid item's default `min-width` is `auto`, which resolves to its content's max-content size — so a wide table forces its grid track (and therefore the whole `.layout` grid, and the page) to grow past the viewport, instead of the table clipping/scrolling inside its track.
 
-**Fix**: `min-width: 0` on `.layout > .content` (the grid item that holds page content), plus `grid-template-columns: … minmax(0, 1fr)` on any grid track that should behave the same way, plus `min-width: 0` on any cell that needs to truncate with `text-overflow: ellipsis` rather than force its column wider.
+**Fix**: `min-width: 0` on the grid item that holds page content, plus `grid-template-columns: … minmax(0, 1fr)` on any grid track that should behave the same way, plus `min-width: 0` on any cell that needs to truncate with `text-overflow: ellipsis` rather than force its column wider.
 
 **How to avoid**: any time a grid or flex item contains content that might be wider than its track (a table, a long unbreakable string, a `<pre>`), give that item `min-width: 0` explicitly. The default `auto` is almost never what you want once there's overflow-prone content inside.
+
+## 8. `width="100%"` on a fixed `viewBox` letterboxes an SVG chart instead of stretching it
+
+**Symptom**: every chart on `/analytics` rendered as a ~640px-wide drawing floating in the middle of a ~1300px panel, with equal dead gutters left and right. Nothing in the CSS set a max-width, and the panel itself was full width.
+
+**Root cause**: `Chart.tsx` authored a fixed `viewBox="0 0 640 200"` and then set `width="100%" height={200}`. An SVG's default `preserveAspectRatio` is `xMidYMid meet` — "scale uniformly until the whole viewBox fits, then centre it." With the height pinned at 200 and the viewBox aspect locked at 640:200, the drawing could not grow horizontally past 640 without exceeding 200 tall, so it scaled to fit the *height* and centred itself in the leftover width. The chart was behaving exactly as specified; the specification was wrong.
+
+**Fix**: measure the container and author the viewBox in real pixels, so one drawing unit is always one CSS pixel:
+```ts
+const ro = new ResizeObserver(([e]) => { if (e.contentRect.width > 0) setW(e.contentRect.width); });
+// …then viewBox={`0 0 ${W} ${height}`} width={W} height={height}
+```
+This also keeps axis labels and stroke weights at their authored size instead of scaling with the panel — `preserveAspectRatio="none"` would have filled the width but stretched the type horizontally, which is worse.
+
+**How to avoid**: a fixed `viewBox` plus a percentage `width` plus a fixed `height` is always a letterbox, never a stretch. If an inline-SVG chart must be responsive, either measure the container (preferred — keeps type metrics honest) or drop the fixed `height` and let `height: auto` follow the aspect ratio. Never reach for `preserveAspectRatio="none"` on anything containing text.
 
 ## 6. `rtk pnpm <script>` prints a FALSE "No errors found"
 
