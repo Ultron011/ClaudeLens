@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { Icon } from './Icon.js';
+import { ThemeToggler } from './ThemeToggler.js';
 
 export interface Crumb {
   label: string;
@@ -47,7 +48,10 @@ export function Shell({
             </span>
           )}
         </nav>
-        {actions && <div className="topbar-actions">{actions}</div>}
+        <div className="topbar-actions">
+          {actions}
+          <ThemeToggler />
+        </div>
       </header>
       <main className="page" id="main">
         {children}

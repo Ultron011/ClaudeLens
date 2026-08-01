@@ -163,6 +163,68 @@
   --mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace;
 }
 
+/* Dark theme.
+ *
+ * The ground is a NEUTRAL, very slightly cool charcoal — not tinted toward the brand green. A
+ * green-tinted near-black plus a bright emerald accent reads as terminal-green-on-black, which is
+ * a costume, not this product's identity. Keeping the ground neutral is what lets the emerald read
+ * as one deliberate accent instead of flooding the page.
+ *
+ * The accent does NOT become a bright solid fill here. On light, `.kpi.is-primary` is a solid deep
+ * emerald with white ink; on dark that same treatment at full brightness is the single biggest
+ * source of the black-and-green problem. So on dark `--accent-strong` is a *deep* green surface and
+ * `--accent-ink` is the bright green — a dark green card carrying a bright green number, which is
+ * how the emerald stays restrained at page scale. */
+:root[data-theme='dark'] {
+  --bg: #0c0d10;
+  --bg-sunken: #08090b;
+  --sidebar-bg: #101115;
+  --bg-card: #14161a;
+  --bg-elev: #0f1114;        /* inset furniture is DARKER than the card on dark, not lighter */
+  --bg-raised: #1b1e23;
+
+  --border: #262a31;
+  --border-soft: #1c2026;
+  --border-strong: #363c45;
+
+  --text: #e9ebee;
+  --text-dim: #a4abb5;
+  --text-faint: #848c96;
+
+  --accent: #3ec78d;
+  --accent-hover: #55d69f;
+  /* Surface + ink, not fill + knockout — see the block comment above. */
+  --accent-strong: #123a2a;
+  --accent-ink: #56d69e;
+  --accent-soft: rgba(62, 199, 141, 0.13);
+  --accent-line: rgba(62, 199, 141, 0.30);
+  --skill: #3ec78d;
+
+  /* Ink inverts on dark: the "solid dark chip" becomes a solid light chip. */
+  --ink: #ccd2d9;
+  --ink-soft: rgba(233, 235, 238, 0.07);
+
+  --danger: #e8746c;
+  --danger-soft: rgba(232, 116, 108, 0.13);
+  --success: #35c184;
+  --warning: #e0a33c;
+
+  --series-1: #4d94ec;
+  --series-2: #e06a3a;
+  --series-3: #2fb183;
+  --series-4: #d09a2c;
+  --series-5: #dd6b92;
+  --series-6: #63b874;
+  --series-7: #9d93ee;
+  --series-8: #e87b7b;
+  --viz-grid: #1d2027;
+  --viz-axis: #2b3038;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+  --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, 0.50);
+  --shadow-lg: 0 18px 48px -12px rgba(0, 0, 0, 0.68);
+}
+
 * { box-sizing: border-box; }
 html, body, #root { height: 100%; }
 body {
@@ -879,3 +941,8 @@ code { font-family: var(--mono); font-size: 0.86em; }
   /* The shimmer becomes a flat tint rather than a one-shot flash. */
   .skel { background: var(--bg-raised); animation: none; }
 }
+
+/* The theme toggle animates a circular clip-path on ::view-transition-new(root). The default
+ * cross-fade would run *underneath* that and muddy it, so both halves are suppressed. */
+::view-transition-old(root),
+::view-transition-new(root) { animation: none; mix-blend-mode: normal; }

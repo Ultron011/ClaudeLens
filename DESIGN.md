@@ -39,6 +39,42 @@ colors:
   series-8: "#bd4040"
   viz-grid: "#ebeee9"
   viz-axis: "#d4d9d1"
+colorsDark:
+  bg: "#0a0d0b"
+  bg-sunken: "#070908"
+  sidebar-bg: "#0d110e"
+  bg-card: "#141a16"
+  bg-elev: "#0f150f"
+  bg-raised: "#1c231e"
+  border: "#262e28"
+  border-soft: "#1c231e"
+  border-strong: "#35403a"
+  text: "#e8efe9"
+  text-dim: "#a3b0a8"
+  text-faint: "#849289"
+  accent: "#35c184"
+  accent-hover: "#4ad196"
+  accent-strong: "#35c184"
+  accent-ink: "#06170f"
+  accent-soft: "rgba(53, 193, 132, 0.14)"
+  accent-line: "rgba(53, 193, 132, 0.34)"
+  skill: "#35c184"
+  ink: "#cfdad3"
+  ink-soft: "rgba(232, 239, 233, 0.08)"
+  danger: "#e8746c"
+  danger-soft: "rgba(232, 116, 108, 0.13)"
+  success: "#35c184"
+  warning: "#e0a33c"
+  series-1: "#3987e5"
+  series-2: "#d95926"
+  series-3: "#199e70"
+  series-4: "#c98500"
+  series-5: "#d55181"
+  series-6: "#46a758"
+  series-7: "#9085e9"
+  series-8: "#e66767"
+  viz-grid: "#1e251f"
+  viz-axis: "#2c342e"
 typography:
   fontFamily: "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Inter, sans-serif"
   monoFamily: "ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, monospace"
@@ -86,15 +122,35 @@ session → transcript**. Visitor mode is **Operate**: the reader is doing a tas
 density and familiar affordances outrank expression. Brand lives in precision — tabular numerals,
 tight alignment, one accent used only where it means something.
 
-The world: a soft green-tinted grey page with **white cards that lift on a shadow**, a white rail,
-and one deep emerald for selection and the primary metric. Derived from the pinned references
-`references/dribble-ref-01` and `-02`.
+The world, in **two themes** off one token set:
+
+- **Light** (default) — a soft green-tinted grey page with **white cards that lift on a shadow**, a
+  white rail, and one deep emerald for selection and the primary metric. From
+  `references/dribble-ref-01` and `-02`.
+- **Dark** — a near-black ground tinted toward the same green, with the emerald brightened so it
+  still carries text contrast. From `references/dribble-ref-04`.
+
+Both are a token swap on a single `data-theme` attribute; see `### Themes` below. Nothing about the
+composition, density or type changes between them.
 
 `PRODUCT.md` records the same commitment (principle 5) and keeps the superseded "dark surface +
 Claude-ember" wording visible as a recorded reversal, so the change reads as a decision rather than
 as drift.
 
 ## Colors
+
+### Themes
+
+Light is the default. Dark is `references/dribble-ref-04`'s near-black, tinted toward the brand
+green. The switch is a single `data-theme` attribute on `:root`, resolved before first paint by an
+inline script in `index.html` so there is no flash. **Dark mode is a token swap only** — a
+component that needs a per-theme override is a bug in that component, not a new selector.
+
+One role inverts deliberately: on light, `--accent-strong` is the deep emerald (`#157551`) with
+white ink; on dark it is the *bright* emerald (`#35c184`) with dark ink (`#06170f`), because a
+dark-green fill has no contrast on a dark page. `--bg-elev` inverts too — recessed furniture is
+*darker* than the card on dark (`#0f150f` under `#141a16`), where on light it is a lighter-than-
+white-card grey (`#f4f6f4` under `#ffffff`).
 
 ### Surfaces
 
@@ -331,6 +387,7 @@ and **must be kept in step**.
 |---|---|
 | `AppLayout` | Layout route: rail + the one org-stats fetch + `useOrgStats()` + skip link. |
 | `Shell` | Sticky breadcrumb bar (`crumbs`, `tagline`, `actions`) + `<main class="page">`. |
+| `ThemeToggler` | Top-right of the topbar on every page. Shows the icon of the theme you will switch *to*, animates a circular `clip-path` wipe from the button via the View Transitions API, and swaps instantly under `prefers-reduced-motion` or where the API is unsupported. A hand-rolled equivalent of MagicUI's `AnimatedThemeToggler`, since that needs Tailwind and a registry install and `web` is capped at 4 runtime deps. |
 | `Icon` / `Logo` | The icon system above. `IconName` is the closed set. |
 | `Kpi` / `KpiSkeleton` | Label row (icon + uppercase label) → value → `foot`. `primary` = the solid tile. `foot` carries context, **never a fabricated trend delta** — the API supplies no period-over-period change and inventing one would be a claim the data can't back. The skeleton is the same box, so the band never reflows. |
 | `Stat` / `Metric` | In-card stat and detail-page metric. One shared implementation. |
@@ -414,6 +471,7 @@ visible on touch, and resolve on `:focus-within` for keyboard.
 | `--t-fast` | 120ms — colour and opacity |
 | `--t` | 180ms — card lift, hover-revealed actions |
 | `--t-slow` | 260ms — donut arc growth |
+| _(theme wipe)_ | 520ms, `cubic-bezier(0.25, 1, 0.5, 1)` — the `ThemeToggler`'s circular `clip-path` wipe on `::view-transition-new(root)`. `::view-transition-old/new(root) { animation: none }` stops the default cross-fade from muddying it. |
 
 Exponential ease-out, no bounce, no elastic. Motion conveys state only: hover lift, focus, reveal,
 skeleton shimmer, donut arcs settling. No page-load choreography — the reader arrived to do a task.

@@ -32,7 +32,9 @@ export type IconName =
   | 'cpu'
   | 'branch'
   | 'home'
-  | 'arrowUpRight';
+  | 'arrowUpRight'
+  | 'sun'
+  | 'moon';
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName;
@@ -152,6 +154,17 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M5.75 4.75h5.5v5.5" />
     </>
   ),
+  /* All eight rays run on the same two radii — inner 4.8, outer 6.5 from centre — so the four
+   * diagonals sit on true 45° lines. Getting a diagonal even slightly off-axis makes the whole
+   * sun look lopsided, which is exactly what the first attempt here did (two rays ran 3:1.4). */
+  sun: (
+    <>
+      <circle cx="8" cy="8" r="3.4" />
+      <path d="M8 1.5v1.7M8 12.8v1.7M1.5 8h1.7M12.8 8h1.7" />
+      <path d="M3.4 3.4l1.2 1.2M12.6 3.4l-1.2 1.2M11.4 11.4l1.2 1.2M4.6 11.4l-1.2 1.2" />
+    </>
+  ),
+  moon: <path d="M13.5 9.35A5.75 5.75 0 0 1 6.65 2.5a5.75 5.75 0 1 0 6.85 6.85z" />,
 };
 
 /** The ClaudeLens brand mark.

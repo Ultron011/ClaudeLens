@@ -195,6 +195,24 @@
 .chart-table th:first-child, .chart-table td:first-child { padding-left: 0; }
 .chart-table th:last-child, .chart-table td:last-child { padding-right: 0; }
 
+/* ---- theme toggle ---- */
+.theme-toggle {
+  display: grid; place-items: center;
+  width: 30px; height: 30px;
+  border-radius: var(--r-md);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: color var(--t-fast) var(--ease), background var(--t-fast) var(--ease),
+    border-color var(--t-fast) var(--ease);
+}
+.theme-toggle:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: var(--bg-raised);
+}
+
 /* ---- misc ---- */
 .load-more { display: flex; justify-content: center; margin-top: var(--s5); }
 .inline-icon { display: inline-flex; align-items: center; gap: 5px; vertical-align: -2px; }
