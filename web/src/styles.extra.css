@@ -220,3 +220,50 @@
 /* ---- misc ---- */
 .load-more { display: flex; justify-content: center; margin-top: var(--s5); }
 .inline-icon { display: inline-flex; align-items: center; gap: 5px; vertical-align: -2px; }
+
+/* ---- model analytics: token composition bars ---- */
+.tok-legend {
+  display: flex; gap: var(--s5); align-items: center; margin-bottom: var(--s3);
+  font-size: var(--fs-xs); color: var(--text-dim); flex-wrap: wrap;
+}
+.tok-legend-item { display: flex; align-items: center; gap: 5px; }
+.tok-dot { display: inline-block; width: 10px; height: 10px; border-radius: 2px; }
+
+.tok-bar-wrap { display: flex; align-items: center; gap: var(--s2); min-width: 160px; }
+.tok-bar {
+  flex: 1; height: 8px; border-radius: 4px; overflow: hidden;
+  background: var(--bg-raised); display: flex;
+}
+.tok-seg { height: 100%; }
+.tok-seg--input      { background: var(--series-1); }
+.tok-seg--cache-read { background: var(--series-3); }
+.tok-seg--cache-write { background: var(--series-4); }
+.tok-seg--output     { background: var(--series-2); }
+.tok-seg--other      { background: var(--border-soft); }
+.tok-bar-label { font-size: var(--fs-xs); color: var(--text-dim); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* ---- model analytics: permission modes + top tools bars ---- */
+.mode-list { display: flex; flex-direction: column; gap: var(--s2); }
+.mode-row { display: flex; align-items: center; gap: var(--s3); font-size: var(--fs-md); }
+.mode-name { width: 140px; flex-shrink: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mode-bar-track {
+  flex: 1; height: 6px; border-radius: 3px; background: var(--bg-raised); overflow: hidden; min-width: 60px;
+}
+.mode-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.mode-count { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: var(--fs-sm); width: 48px; text-align: right; }
+.mode-pct { font-size: var(--fs-xs); width: 32px; text-align: right; }
+
+/* ---- nav sub-item (indented under Analytics) ---- */
+.nav-item--sub { padding-left: calc(var(--s2) + 16px + var(--s3)); }
+
+/* ---- date inputs ---- */
+.date-input {
+  padding: 4px 8px; border-radius: var(--r-sm); border: 1px solid var(--border);
+  background: var(--bg-elev); color: var(--text); font-size: var(--fs-sm);
+  font-family: var(--font-sans);
+}
+.date-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
+
+/* ---- subtle link (no underline until hover) ---- */
+.subtle-link { color: inherit; text-decoration: none; }
+.subtle-link:hover { color: var(--accent); text-decoration: underline; }

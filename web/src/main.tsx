@@ -7,6 +7,7 @@ import { UserPage } from './pages/UserPage.js';
 import { ProjectPage } from './pages/ProjectPage.js';
 import { SessionPage } from './pages/SessionPage.js';
 import { AnalyticsPage } from './pages/AnalyticsPage.js';
+import { ModelAnalyticsPage } from './pages/ModelAnalyticsPage.js';
 import './styles.css';
 import './styles.extra.css';
 
@@ -22,6 +23,8 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           {/* Per-person analytics is NOT nested under /u/:author/analytics — a project's route
            * segment is basename(cwd), and a project genuinely named "analytics" would collide. */}
           <Route path="/analytics/u/:author" element={<AnalyticsPage />} />
+          <Route path="/analytics/models" element={<ModelAnalyticsPage />} />
+          <Route path="/analytics/models/u/:author" element={<ModelAnalyticsPage />} />
           <Route path="/u/:author" element={<UserPage />} />
           <Route path="/u/:author/:project" element={<ProjectPage />} />
           <Route path="/session/:id" element={<SessionPage />} />

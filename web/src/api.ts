@@ -64,6 +64,44 @@ export interface Analytics {
   models: AnalyticsModel[];
 }
 
+export interface ModelDetail {
+  model: string;
+  sessions: number;
+  turns: number;
+  activeMs: number;
+  tokens: number;
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+  cost: string | null;
+  measured: boolean;
+  avgSessionDurationMs: number | null;
+}
+
+export interface AuthorModelRow {
+  identity: string;
+  label: string;
+  model: string;
+  sessions: number;
+}
+
+export interface ModelAnalyticsTotals {
+  sessions: number;
+  turns: number;
+  tokens: number;
+  cost: string | null;
+}
+
+export interface ModelAnalytics {
+  tz: 'UTC';
+  totals: ModelAnalyticsTotals;
+  models: ModelDetail[];
+  tools: Array<{ tool: string; uses: number }>;
+  permissionModes: Array<{ mode: string; sessions: number }>;
+  authorModels: AuthorModelRow[];
+}
+
 export interface ListSessionsParams {
   author?: string;
   project?: string;
@@ -97,6 +135,15 @@ export function listSessions(
 
 export const getSession = (id: string, signal?: AbortSignal) =>
   get<SessionDetail>(`/api/sessions/${id}`, signal);
+
+export function getModelAnalytics(
+  identity?: string,
+  from?: string,
+  to?: string,
+  signal?: AbortSignal,
+): Promise<ModelAnalytics> {
+  return get(`/api/model-analytics?${qs({ identity, from, to })}`, signal);
+}
 export const getStats = (signal?: AbortSignal) => get<OrgStats>('/api/stats', signal);
 
 /** Omit `identity` for org-wide analytics. */

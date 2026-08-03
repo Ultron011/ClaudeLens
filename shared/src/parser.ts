@@ -16,7 +16,7 @@ import { redactText } from './redact.js';
 
 /** Backfill ledger key: bump this when the parser's output shape changes so old sessions
  *  auto-re-sync instead of being skipped forever. */
-export const PARSER_VERSION = 4;
+export const PARSER_VERSION = 5;
 
 const ARG_CAP = 300;
 
@@ -166,7 +166,7 @@ export function parseTranscript(jsonl: string): ParsedSession {
   const timestamps: string[] = [];
 
   const ensureModel = (m: string): ModelUsage =>
-    (modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true });
+    (modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 });
   const ensureDay = (d: string): DailyStats =>
     (daily[d] ??= { turns: 0, userMessages: 0, totalTokens: 0, costUsd: 0, activeMs: 0 });
 
@@ -248,6 +248,10 @@ export function parseTranscript(jsonl: string): ParsedSession {
       const mu = ensureModel(model ?? '(unknown)');
       mu.totalTokens += turnTokens;
       mu.costUsd += turnCost;
+      mu.inputTokens += u.input_tokens ?? 0;
+      mu.outputTokens += u.output_tokens ?? 0;
+      mu.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+      mu.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
       if (day) ensureDay(day).totalTokens += turnTokens;
       if (day) ensureDay(day).costUsd += turnCost;
     }

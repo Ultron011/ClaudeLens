@@ -43,6 +43,11 @@ export interface ModelUsage {
   activeMs: number;
   /** false when activeMs came from the capped-gap fallback (no turn_duration lines). */
   measured: boolean;
+  /** Per-model token breakdown — populated from parser v5+; zero on older sessions. */
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
 }
 
 /** One UTC calendar day of a session. Sessions span days (resumes), which is why this is

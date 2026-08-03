@@ -56,11 +56,17 @@ function SideNav({ stats }: { stats: OrgStats | null }) {
         </NavLink>
         {/* Analytics has a per-person variant at /analytics/u/:author — both should light this up,
          * which NavLink does by prefix once `end` is omitted. */}
-        <NavLink to="/analytics" className="nav-item">
+        <NavLink to="/analytics" end className="nav-item">
           <span className="nav-icon">
             <Icon name="chart" />
           </span>
           <span className="nav-text">Analytics</span>
+        </NavLink>
+        <NavLink to="/analytics/models" className="nav-item nav-item--sub">
+          <span className="nav-icon">
+            <Icon name="cpu" />
+          </span>
+          <span className="nav-text">Models</span>
         </NavLink>
       </div>
 
