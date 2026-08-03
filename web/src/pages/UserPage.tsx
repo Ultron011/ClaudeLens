@@ -38,7 +38,7 @@ export function UserPage() {
     data: rows,
     err,
     refetch,
-  } = useFetch<SessionSummary[]>((signal) => listSessions({ author }, signal), [author]);
+  } = useFetch<SessionSummary[]>((signal) => listSessions({ author, limit: 500 }, signal), [author]);
   const [pending, setPending] = useState<ProjectGroup | null>(null);
 
   // Flat view: a separate paginated fetch — grouped view keeps the full client-side grouping

@@ -263,16 +263,93 @@ app.get('/api/analytics', async (req, res) => {
   }
 });
 
+// Extended model analytics: per-model token breakdown, tools, permission modes, team matrix.
+// identity omitted = org-wide. Same from/to semantics as /api/analytics.
+app.get('/api/model-analytics', async (req, res) => {
+  const { identity, from, to } = req.query as Record<string, string>;
+  const args: unknown[] = [identity ?? null, from ?? null, to ?? null];
+  const scopeWhere =
+    `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
+    ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
+  try {
+    const [modelsQ, toolsQ, modesQ, authorModelsQ, totalsQ] = await Promise.all([
+      pool.query(
+        `WITH scope AS (SELECT stats, started_at, ended_at FROM sessions WHERE ${scopeWhere})
+         SELECT kv.key AS model,
+                count(*)::int AS sessions,
+                sum((kv.value->>'turns')::int)::int AS turns,
+                sum((kv.value->>'activeMs')::bigint)::bigint AS "activeMs",
+                sum((kv.value->>'totalTokens')::bigint)::bigint AS tokens,
+                sum(coalesce((kv.value->>'inputTokens')::bigint, 0))::bigint AS "inputTokens",
+                sum(coalesce((kv.value->>'outputTokens')::bigint, 0))::bigint AS "outputTokens",
+                sum(coalesce((kv.value->>'cacheReadTokens')::bigint, 0))::bigint AS "cacheReadTokens",
+                sum(coalesce((kv.value->>'cacheCreationTokens')::bigint, 0))::bigint AS "cacheCreationTokens",
+                round(sum((kv.value->>'costUsd')::numeric), 4) AS cost,
+                bool_and((kv.value->>'measured')::boolean) AS measured,
+                round(avg(EXTRACT(EPOCH FROM (scope.ended_at - scope.started_at)) * 1000))::bigint AS "avgSessionDurationMs"
+           FROM scope, LATERAL jsonb_each(coalesce(stats->'modelUsage','{}'::jsonb)) kv
+          GROUP BY 1 ORDER BY "activeMs" DESC NULLS LAST`,
+        args,
+      ),
+      pool.query(
+        `WITH scope AS (SELECT stats FROM sessions WHERE ${scopeWhere})
+         SELECT key AS tool, sum(value::int)::int AS uses
+           FROM scope, LATERAL jsonb_each_text(stats->'toolUsage')
+          GROUP BY key ORDER BY uses DESC LIMIT 30`,
+        args,
+      ),
+      pool.query(
+        `SELECT mode, count(*)::int AS sessions
+           FROM sessions, LATERAL unnest(permission_modes) AS mode
+          WHERE ${scopeWhere} AND mode IS NOT NULL
+          GROUP BY mode ORDER BY sessions DESC`,
+        args,
+      ),
+      // Use stats->'models' (string array, present on ALL sessions) so every author appears,
+      // not stats->'modelUsage' (only populated for parser_version >= 5 sessions).
+      pool.query(
+        `WITH scope AS (
+           SELECT stats,
+                  coalesce(account_email, author) AS identity,
+                  coalesce(account_display_name, author) AS label
+             FROM sessions WHERE ${scopeWhere}
+         )
+         SELECT scope.identity, scope.label, model,
+                count(*)::int AS sessions
+           FROM scope, LATERAL jsonb_array_elements_text(coalesce(stats->'models','[]'::jsonb)) AS model
+          GROUP BY 1, 2, 3 ORDER BY 1, sessions DESC`,
+        args,
+      ),
+      pool.query(
+        `SELECT count(*)::int AS sessions,
+                sum((stats->>'turns')::int)::int AS turns,
+                sum((stats->>'totalTokens')::bigint)::bigint AS tokens,
+                round(sum((stats->>'estimatedCostUsd')::numeric), 4) AS cost
+           FROM sessions WHERE ${scopeWhere}`,
+        args,
+      ),
+    ]);
+    res.json({
+      tz: 'UTC',
+      totals: totalsQ.rows[0],
+      models: modelsQ.rows,
+      tools: toolsQ.rows,
+      permissionModes: modesQ.rows,
+      authorModels: authorModelsQ.rows,
+    });
+  } catch (err) {
+    console.error('model-analytics error:', err);
+    res.status(500).json({ error: 'model-analytics failed' });
+  }
+});
+
 // Aggregate stats for the value / leaderboard panel.
 app.get('/api/stats', async (_req, res) => {
   try {
     const authors = await pool.query(`
       SELECT coalesce(account_email, author) AS identity,
              (array_agg(author ORDER BY updated_at DESC))[1] AS author,
-             coalesce(
-               (array_agg(account_display_name ORDER BY updated_at DESC) FILTER (WHERE account_display_name IS NOT NULL))[1],
-               (array_agg(author ORDER BY updated_at DESC))[1]
-             ) AS label,
+             (array_agg(author ORDER BY updated_at DESC))[1] AS label,
              (array_agg(org_name ORDER BY updated_at DESC) FILTER (WHERE org_name IS NOT NULL))[1] AS "orgName",
              count(*)::int AS sessions,
              count(DISTINCT project)::int AS projects,
