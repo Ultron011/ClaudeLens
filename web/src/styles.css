@@ -137,6 +137,9 @@
   --shadow-sm: 0 1px 2px rgba(22, 38, 30, 0.05);
   --shadow-md: 0 2px 8px -2px rgba(22, 38, 30, 0.08);
   --shadow-lg: 0 18px 48px -12px rgba(22, 38, 30, 0.22);
+  /* Edge shade for a horizontally scrolled region (the phone tables). Theme-scoped because a
+   * green-tinted wash is invisible against the dark ground. */
+  --scroll-shade: rgba(22, 38, 30, 0.16);
 
   /* ---- z-index scale (semantic, never arbitrary) ---- */
   --z-base: 1;
@@ -223,6 +226,7 @@
   --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
   --shadow-md: 0 4px 16px -4px rgba(0, 0, 0, 0.50);
   --shadow-lg: 0 18px 48px -12px rgba(0, 0, 0, 0.68);
+  --scroll-shade: rgba(0, 0, 0, 0.55);
 }
 
 * { box-sizing: border-box; }
@@ -276,7 +280,11 @@ code { font-family: var(--mono); font-size: 0.86em; }
   padding: var(--s6) var(--s7) var(--s9);
   flex: 1;
 }
-@media (max-width: 720px) { .page { padding: var(--s5) var(--s4) var(--s8); } }
+/* The trailing padding clears the fixed bottom tab bar (52px + safe-area) so the last row of a
+ * table or the final transcript turn isn't parked underneath it. */
+@media (max-width: 720px) {
+  .page { padding: var(--s5) var(--s4) calc(var(--s8) + 56px + env(safe-area-inset-bottom, 0px)); }
+}
 
 /* ---- side nav ---- */
 .sidenav {
@@ -340,6 +348,13 @@ code { font-family: var(--mono); font-size: 0.86em; }
  * off-canvas drawer. Navigation stays visible and one tap away at every width. */
 @media (max-width: 1000px) {
   .app-shell { grid-template-columns: minmax(0, 1fr); }
+  /* Load-bearing. `.app-shell` is `min-height: 100vh`, and once it collapses to one column the
+   * strip and the content become two AUTO rows — which grid's default `align-content: stretch`
+   * then inflates to fill the viewport. On any page whose content is shorter than the screen
+   * (a person with three projects, a two-turn session) that handed the nav strip several hundred
+   * pixels of empty white above the breadcrumb. Pinning the rows makes the strip its own height
+   * and gives the slack to the content row. */
+  .app-shell { grid-template-rows: auto minmax(0, 1fr); }
   .sidenav {
     position: static; height: auto; flex-direction: row; align-items: center;
     gap: var(--s4); padding: var(--s3) var(--s4); overflow-x: auto;
@@ -359,6 +374,82 @@ code { font-family: var(--mono); font-size: 0.86em; }
   .nav-group--people { border-left: 1px solid var(--border-soft); padding-left: var(--s4); }
 }
 
+/* ---- phone navigation (≤720px) ----
+ *
+ * Below the phone breakpoint the rail's horizontal strip is replaced outright by a fixed bottom
+ * tab bar plus a Team sheet (see MobileNav in AppLayout.tsx for why). Above it, MobileNav is not
+ * rendered at all — these are the only rules that reveal it. */
+.mnav, .mnav-sheet, .mnav-scrim { display: none; }
+
+@media (max-width: 720px) {
+  .sidenav { display: none; }
+
+  .mnav {
+    display: grid; grid-template-columns: repeat(4, 1fr);
+    /* Above the scrim, not under it: the sheet opens ABOVE the bar rather than over it, so the
+     * other three tabs stay live while the team list is up — tapping Analytics goes straight
+     * there instead of costing a dismiss first. */
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: var(--z-modal);
+    background: color-mix(in srgb, var(--sidebar-bg) 92%, transparent);
+    backdrop-filter: blur(12px);
+    border-top: 1px solid var(--border);
+    /* Clears the iOS home indicator; resolves to 0 everywhere else. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .mnav-item {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    /* 52px + the label row clears the 44px touch-target floor on every tab. */
+    min-height: 52px; padding: 7px 4px 8px;
+    appearance: none; border: none; background: none; font: inherit; cursor: pointer;
+    color: var(--text-faint); font-size: var(--fs-2xs); font-weight: 550; letter-spacing: 0.01em;
+    transition: color var(--t-fast) var(--ease);
+  }
+  .mnav-item span { line-height: 1; }
+  .mnav-item svg { opacity: 0.9; }
+  .mnav-item[aria-current='page'], .mnav-item.is-open {
+    color: var(--accent);
+  }
+  .mnav-item[aria-current='page'] svg, .mnav-item.is-open svg { opacity: 1; }
+
+  .mnav-scrim {
+    display: block; position: fixed; inset: 0; z-index: var(--z-backdrop);
+    background: rgba(22, 38, 30, 0.34); backdrop-filter: blur(2px);
+  }
+  .mnav-sheet {
+    display: flex; flex-direction: column;
+    position: fixed; left: 0; right: 0; z-index: var(--z-modal);
+    /* Sits on top of the tab bar's own height, so the bar remains visible and tappable. */
+    bottom: calc(52px + env(safe-area-inset-bottom, 0px));
+    max-height: 68vh;
+    background: var(--bg-card); border-top: 1px solid var(--border);
+    border-radius: var(--r-xl) var(--r-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    padding: var(--s4);
+    animation: mnav-rise var(--t-slow) var(--ease);
+  }
+  .mnav-sheet-head {
+    display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
+    padding-bottom: var(--s3); margin-bottom: var(--s2);
+    border-bottom: 1px solid var(--border-soft);
+  }
+  .mnav-sheet-head h2 { margin: 0; font-size: var(--fs-lg); font-weight: 620; letter-spacing: -0.012em; }
+  .mnav-people {
+    list-style: none; margin: 0; padding: 0;
+    overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch;
+  }
+  .mnav-person {
+    display: flex; align-items: center; gap: var(--s3);
+    min-height: 46px; padding: var(--s2) var(--s2);
+    border-radius: var(--r-md); color: var(--text); font-size: var(--fs-base);
+  }
+  .mnav-person-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .mnav-person-count { color: var(--text-faint); font-size: var(--fs-sm); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+  .mnav-person[aria-current='page'] { background: var(--accent-soft); color: var(--accent); }
+  .mnav-person[aria-current='page'] .mnav-person-count { color: var(--accent); }
+}
+
+@keyframes mnav-rise { from { transform: translateY(100%); } to { transform: translateY(0); } }
+
 /* ---- topbar ---- */
 .topbar {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s4);
@@ -369,7 +460,18 @@ code { font-family: var(--mono); font-size: 0.86em; }
   backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--border-soft);
 }
-@media (max-width: 720px) { .topbar { padding: 0 var(--s4); } }
+/* The topbar is a fixed-height, non-wrapping row on desktop. On a phone that guaranteed an
+ * overflow: `.topbar-actions` is `flex-shrink: 0`, and on the analytics pages it carries a
+ * five-option range toggle plus the theme button (~280px) — which crushed the breadcrumb to a
+ * bare "/" and still pushed the row past the viewport. Here it wraps to a second line instead
+ * and grows to fit, so the crumb keeps a readable width and nothing is pushed off-screen. */
+@media (max-width: 720px) {
+  .topbar {
+    padding: var(--s2) var(--s4);
+    height: auto; min-height: var(--topbar-h);
+    flex-wrap: wrap; row-gap: var(--s2);
+  }
+}
 
 .crumbs { display: flex; align-items: center; gap: var(--s2); min-width: 0; flex: 1; overflow: hidden; }
 /* min-width:0 on the crumb AND on its label is what actually lets a long session title shrink —
@@ -393,6 +495,22 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .crumb-home { color: var(--text-faint); display: inline-flex; }
 .topbar-actions { display: flex; gap: var(--s2); flex-shrink: 0; align-items: center; }
 
+/* MUST come after the `.crumbs` and `.topbar-actions` base rules above — an identical-specificity
+ * override placed before them loses, and `.crumbs` silently keeps its `flex: 1` (basis 0), which
+ * is exactly what stopped the row from ever wrapping and left the breadcrumb squeezed to a bare
+ * "/" beside the five-option range toggle. */
+@media (max-width: 720px) {
+  /* A 60% basis rather than 100%: flex breaks a line on hypothetical sizes before it shrinks
+   * anything, so a page whose only action is the theme button still shares one row, while the
+   * analytics range toggle wraps to its own. Two rows only where two rows are needed. */
+  .crumbs { flex: 1 1 60%; }
+  .topbar-actions { flex-wrap: wrap; max-width: 100%; }
+  /* The range toggle can still outgrow the width on its own; let it scroll rather than force a
+   * wrap that would split one segmented control across two lines. */
+  .topbar-actions .segmented { max-width: 100%; overflow-x: auto; scrollbar-width: none; }
+  .topbar-actions .segmented::-webkit-scrollbar { display: none; }
+}
+
 /* ============================================================
    PAGE HEAD
    ============================================================ */
@@ -407,6 +525,20 @@ code { font-family: var(--mono); font-size: 0.86em; }
 }
 .page-head .lede { color: var(--text-dim); font-size: var(--fs-md); margin: 0; max-width: 68ch; text-wrap: pretty; }
 .page-head-actions { display: flex; gap: var(--s2); align-items: center; flex-wrap: wrap; }
+
+/* A 30px h1 over a five-line lede is most of a phone screen spent on preamble before any number
+ * appears. Both step down; the lede's measure is already capped, so only its size changes. */
+@media (max-width: 720px) {
+  .page-head { gap: var(--s3); margin-bottom: var(--s5); }
+  .page-head h1 { font-size: var(--fs-3xl); }
+  /* A project's h1 is its path — mono, unbreakable, and frequently longer than a phone is wide
+   * (`D:\office\BeyondChats` already reaches the edge at 24px). It gets its own step down and
+   * permission to break, which a prose h1 doesn't need. */
+  .page-head h1.mono { font-size: var(--fs-2xl); overflow-wrap: anywhere; }
+  .page-head .lede { font-size: var(--fs-sm); }
+  .entity-head { gap: var(--s3); }
+  .avatar-lg { width: 40px; height: 40px; font-size: var(--fs-xl); }
+}
 
 /* identity header — avatar + name + sub, used on User/Project pages */
 .entity-head { display: flex; align-items: center; gap: var(--s4); min-width: 0; }
@@ -488,9 +620,12 @@ code { font-family: var(--mono); font-size: 0.86em; }
   min-width: 0;
 }
 .panel.flush { padding: 0; overflow: hidden; }
+/* `flex-wrap` is not optional here: a panel head is a title beside its controls, and several
+ * carry two segmented controls (User's By project|All sessions + Table|Cards). Without wrapping
+ * those overlapped the heading and clipped past the panel's right edge on a phone. */
 .panel-head {
   display: flex; align-items: center; justify-content: space-between; gap: var(--s3);
-  margin-bottom: var(--s4);
+  margin-bottom: var(--s4); flex-wrap: wrap;
 }
 .panel-head.tight { margin-bottom: var(--s3); }
 /* Section titles must outrank the 14px body they sit above — at 13px the hierarchy inverted and
@@ -529,6 +664,18 @@ code { font-family: var(--mono); font-size: 0.86em; }
 }
 .kpi-value.sm { font-size: var(--fs-2xl); }
 .kpi-foot { font-size: var(--fs-sm); color: var(--text-faint); margin-top: 2px; }
+
+/* Two-up on a phone. At `minmax(190px, 1fr)` a 390px viewport resolves to a single column, so a
+ * four-tile band became four full-width cards carrying 30px numerals — roughly a screen and a
+ * half of KPIs before the first chart or table. A KPI band is meant to be read at a glance, and
+ * a glance doesn't scroll. */
+@media (max-width: 720px) {
+  .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--s3); }
+  .kpi { padding: var(--s3) var(--s4); }
+  .kpi-value { font-size: var(--fs-3xl); }
+  .kpi-label { font-size: var(--fs-2xs); }
+  .kpi-foot { font-size: var(--fs-xs); }
+}
 
 /* Exactly one tile per band is solid-filled — the page's primary metric (after
  * references/dribble-ref-01's "Total Projects" tile). Two filled tiles in one band means the
@@ -575,7 +722,13 @@ code { font-family: var(--mono); font-size: 0.86em; }
   opacity: 0; transition: opacity var(--t) var(--ease); pointer-events: auto;
 }
 .card:hover .card-actions, .card:focus-within .card-actions { opacity: 1; }
-@media (hover: none) { .card-actions { opacity: 1; } }
+/* On touch there is no hover to reveal the action, so it is permanently visible — which means it
+ * permanently occupies the card's top-right corner and the title has to be told to stop short of
+ * it. Without this the delete button sat on top of the last word of every session title. */
+@media (hover: none) {
+  .card-actions { opacity: 1; }
+  .card:has(.card-actions) .card-head { padding-right: var(--s6); }
+}
 
 .card-head { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--s2); }
 .card-title { margin: 0; font-size: var(--fs-lg); font-weight: 620; line-height: 1.35; letter-spacing: -0.01em; }

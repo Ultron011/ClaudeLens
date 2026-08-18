@@ -38,6 +38,54 @@
   color: var(--danger);
 }
 
+/* ---- DateRangePicker ---- */
+.dr-dialog { max-width: 380px; }
+.dr-fields {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--s3);
+  margin-bottom: var(--s5);
+}
+.dr-label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-dim);
+  flex: 1;
+  min-width: 0;
+}
+.dr-label input[type='date'] {
+  background: var(--bg-sunken);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: var(--r-md);
+  padding: 8px 10px;
+  font-size: var(--fs-md);
+  font-family: inherit;
+  width: 100%;
+  box-sizing: border-box;
+  transition: border-color var(--t-fast) var(--ease);
+  color-scheme: light;
+}
+.dr-label input[type='date']:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+.dr-sep {
+  color: var(--text-faint);
+  font-size: var(--fs-sm);
+  padding-bottom: 10px;
+  flex-shrink: 0;
+}
+/* Segmented "Custom" button with icon — flex so the calendar icon aligns with the label. */
+.segmented .dr-custom-btn { display: flex; align-items: center; gap: 5px; }
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .dr-label input[type='date'] { color-scheme: dark; }
+}
+:root[data-theme='dark'] .dr-label input[type='date'] { color-scheme: dark; }
+
 /* ---- tables ---- */
 .view-toggle { display: flex; }
 
@@ -73,7 +121,13 @@
   letter-spacing: 0.06em; padding: 10px var(--s4); border-bottom: 1px solid var(--border-soft);
   white-space: nowrap;
 }
-.data-table th.num, .data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* `overflow-wrap: anywhere` below is for long unbreakable TEXT (file paths, account names). A
+ * numeric cell is short and must never be broken — without this exclusion a narrow Cost column
+ * split "$0.79" across two lines as "$0.7 / 9", which doesn't just look wrong, it misreads. */
+.data-table th.num, .data-table td.num {
+  text-align: right; font-variant-numeric: tabular-nums;
+  overflow-wrap: normal; white-space: nowrap;
+}
 .data-table td {
   padding: 11px var(--s4); border-top: 1px solid var(--border-soft); vertical-align: middle;
   /* Long titles/account names/paths have no natural break points (e.g. a long unbroken file
@@ -112,13 +166,73 @@
 
 /* Under 720px: horizontal scroll turns on (trading the sticky-header/page-scroll behavior above
  * for a usable narrow-viewport table — see the .table-scroll comment) and the first column pins
- * so the scroll stays orientable. */
+ * so the scroll stays orientable.
+ *
+ * Three things all have to be true for that to actually work, and two of them used to be false:
+ *
+ * 1. THE HEADER MUST STOP BEING STICKY. `overflow-x: auto` makes .table-scroll the containing
+ *    block for its own sticky <thead>, which was still carrying `top: var(--topbar-h)` from the
+ *    desktop rule — so the header row rendered 60px INSIDE the table, painting over the first
+ *    body rows and collapsing the whole thing to a ~40px sliver. This is gotchas.md #4 arriving
+ *    through a different door (there it was `overflow: hidden` added for corner radius); the
+ *    scroll container is new, the re-parenting is identical. Any future `overflow` on an
+ *    ancestor of a sticky <thead> has to reckon with this.
+ *
+ * 2. THE TABLE MUST BE ALLOWED TO EXCEED THE VIEWPORT. `width: 100%` gave the overflow container
+ *    nothing to scroll: the table compressed to fit instead, and `overflow-wrap: anywhere` on the
+ *    cells let it keep compressing by shattering words mid-token. The result was a squeezed table
+ *    that was ALSO clipped, since 9 columns have a min-content floor no phone can honour.
+ *    `min-width: max-content` + `nowrap` restores a real horizontal scroll.
+ *
+ * 3. THE PINNED COLUMN MUST BE BOUNDED. With nowrap, a first cell holding `D:\office\BeyondChats`
+ *    or a full session title would otherwise pin 300px of frozen column across the viewport and
+ *    leave no room for the data being scrolled to. */
 @media (max-width: 720px) {
-  .table-scroll { overflow-x: auto; }
+  .table-scroll {
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    /* Fades the right edge while there is more table to the right of it — the affordance that
+     * says "this scrolls". `background-attachment: local` on the two inner layers pins them to
+     * the content, so each fade disappears exactly when that end is reached. */
+    background:
+      linear-gradient(to right, var(--bg-card) 30%, transparent) left center / 24px 100% no-repeat local,
+      linear-gradient(to left, var(--bg-card) 30%, transparent) right center / 24px 100% no-repeat local,
+      radial-gradient(farthest-side at 0 50%, var(--scroll-shade), transparent) left center / 12px 100% no-repeat scroll,
+      radial-gradient(farthest-side at 100% 50%, var(--scroll-shade), transparent) right center / 12px 100% no-repeat scroll,
+      var(--bg-card);
+  }
+  .data-table { width: auto; min-width: 100%; }
+  .data-table thead th {
+    position: static; /* see (1) above — do not restore `sticky` here */
+  }
+  .data-table td { white-space: nowrap; overflow-wrap: normal; }
   .data-table th:first-child, .data-table td:first-child {
     position: sticky; left: 0; z-index: 2; background: var(--bg-card);
+    max-width: 42vw; overflow: hidden; text-overflow: ellipsis;
+    box-shadow: 1px 0 0 var(--border-soft);
   }
-  .data-table thead th:first-child { z-index: 3; background: var(--bg-elev); }
+  /* SPECIFICITY TRAP — this rule has to exist and has to carry `top: auto`.
+   * `.data-table th:first-child` (0,2,1) outranks `.data-table thead th` (0,1,2), so the
+   * `position: static` above never reached the header's FIRST cell: it stayed sticky and kept
+   * inheriting `top: var(--topbar-h)` from the desktop rule, dropping "Title" 60px down the
+   * table while every other header cell sat in flow. That is the same overlap the block comment
+   * describes, surviving in exactly one cell. Pinning it horizontally is still wanted, so the
+   * fix is to re-declare it with the vertical offset explicitly cleared. */
+  .data-table thead th:first-child {
+    position: sticky; left: 0; top: auto; z-index: 3; background: var(--bg-elev);
+  }
+  /* The first cell is a flex/inline-flex person chip on some tables; ellipsis needs a block. */
+  .data-table td:first-child > a:not(.person) { display: block; overflow: hidden; text-overflow: ellipsis; }
+
+  /* The in-panel model tables get the same scroll treatment. `.chart-table` sits directly on the
+   * panel, so its fades are drawn in the panel's own surface rather than --bg-card. */
+  .chart-table-wrap { -webkit-overflow-scrolling: touch; }
+  .chart-table { width: auto; min-width: 100%; }
+  .chart-table td, .chart-table th { white-space: nowrap; }
+  .chart-table th:first-child, .chart-table td:first-child {
+    position: sticky; left: 0; z-index: 2; background: var(--bg-card);
+    max-width: 40vw; overflow: hidden; text-overflow: ellipsis;
+    box-shadow: 1px 0 0 var(--border-soft);
+  }
 }
 
 /* ---- charts ---- */
@@ -252,6 +366,18 @@
 .mode-bar-fill { height: 100%; background: var(--accent); border-radius: 3px; }
 .mode-count { font-variant-numeric: tabular-nums; color: var(--text-dim); font-size: var(--fs-sm); width: 48px; text-align: right; }
 .mode-pct { font-size: var(--fs-xs); width: 32px; text-align: right; }
+
+/* The fixed widths above (140 + 60 + 48 + 32 + gaps ≈ 316px) exceed the ~300px a panel actually
+ * has inside a 390px viewport, so both the Top tools and Permission modes rows overflowed their
+ * own panel. The label column is the one that can afford to give. */
+@media (max-width: 720px) {
+  .mode-row { gap: var(--s2); font-size: var(--fs-sm); }
+  .mode-name { width: 92px; }
+  .mode-bar-track { min-width: 40px; }
+  .mode-count { width: 40px; }
+  .mode-pct { width: 28px; }
+  .tok-legend { gap: var(--s3); }
+}
 
 /* ---- nav sub-item (indented under Analytics) ---- */
 .nav-item--sub { padding-left: calc(var(--s2) + 16px + var(--s3)); }
