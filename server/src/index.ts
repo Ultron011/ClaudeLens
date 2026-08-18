@@ -310,8 +310,8 @@ app.get('/api/model-analytics', async (req, res) => {
       pool.query(
         `WITH scope AS (
            SELECT stats,
-                  coalesce(account_email, author) AS identity,
-                  coalesce(account_display_name, author) AS label
+                  author AS identity,
+                  author AS label
              FROM sessions WHERE ${scopeWhere}
          )
          SELECT scope.identity, scope.label, model,
@@ -347,9 +347,12 @@ app.get('/api/model-analytics', async (req, res) => {
 app.get('/api/stats', async (_req, res) => {
   try {
     const authors = await pool.query(`
-      SELECT coalesce(account_email, author) AS identity,
-             (array_agg(author ORDER BY updated_at DESC))[1] AS author,
-             (array_agg(author ORDER BY updated_at DESC))[1] AS label,
+      SELECT author,
+             author AS label,
+             coalesce(
+               (array_agg(account_email ORDER BY updated_at DESC) FILTER (WHERE account_email IS NOT NULL))[1],
+               author
+             ) AS identity,
              (array_agg(org_name ORDER BY updated_at DESC) FILTER (WHERE org_name IS NOT NULL))[1] AS "orgName",
              count(*)::int AS sessions,
              count(DISTINCT project)::int AS projects,
@@ -359,7 +362,7 @@ app.get('/api/stats', async (_req, res) => {
              sum((stats->>'turns')::int)::int AS turns,
              sum(${USER_MESSAGES_EXPR})::int AS "userMessages",
              sum((stats->>'totalTokens')::bigint)::bigint AS tokens
-      FROM sessions WHERE hidden = false GROUP BY identity ORDER BY sessions DESC`);
+      FROM sessions WHERE hidden = false GROUP BY author ORDER BY sessions DESC`);
     const skills = await pool.query(`
       SELECT skill, count(*)::int AS uses FROM sessions,
         LATERAL jsonb_array_elements_text(stats->'skills') AS skill
