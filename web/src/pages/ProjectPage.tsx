@@ -9,18 +9,18 @@ import { Icon } from '../components/Icon.js';
 import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { ViewToggle } from '../components/ViewToggle.js';
 import { SessionList } from '../components/SessionList.js';
-import { usePref } from '../usePref.js';
+import { useLayoutPref } from '../usePref.js';
 
 const LIMIT = 50;
 
 export function ProjectPage() {
   const { author = '', project = '' } = useParams<{ author: string; project: string }>();
   const nav = useNavigate();
-  // 'table' default matches Overview and User — usePref stores `layout` under one shared
-  // localStorage key, so differing defaults per page meant whichever page you touched last
-  // silently changed the others.
-  const [layoutRaw, setLayout] = usePref('layout', 'table');
-  const layout = layoutRaw === 'cards' ? 'cards' : 'table';
+  // One shared `layout` key across Overview, User and Project — `usePref` stores it under a
+  // single localStorage entry, so differing defaults per page meant whichever page you touched
+  // last silently changed the others. `useLayoutPref` centralises that default (table on a wide
+  // screen, cards on a phone) so all three stay in step.
+  const [layout, setLayout] = useLayoutPref();
 
   // Paginated, project-scoped fetch — accumulates across "Load more" clicks. Resets whenever
   // author/project changes.

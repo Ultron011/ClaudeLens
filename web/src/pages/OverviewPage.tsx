@@ -6,29 +6,24 @@ import { Stat } from '../components/Stat.js';
 import { Kpi, KpiSkeleton } from '../components/Kpi.js';
 import { Icon } from '../components/Icon.js';
 import { ViewToggle } from '../components/ViewToggle.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { useOrgStats } from '../components/AppLayout.js';
 import { useFetch } from '../useFetch.js';
-import { usePref } from '../usePref.js';
+import { useDateRange, useLayoutPref } from '../usePref.js';
 import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels } from '../charts/palette.js';
 
-const RANGE_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 };
-
 export function OverviewPage() {
   // Org stats come from the layout route — mounted once, shared with the rail.
   const { stats, err } = useOrgStats();
-  const [layoutRaw, setLayout] = usePref('layout', 'table');
-  const layout = layoutRaw === 'cards' ? 'cards' : 'table';
-  const [range, setRange] = usePref('range', '30d');
-  const days = RANGE_DAYS[range] ?? 30;
+  const [layout, setLayout] = useLayoutPref();
+  const { range, from, to, customFrom, customTo, apply } = useDateRange();
 
-  const to = new Date();
-  const from = new Date(to.getTime() - days * 86_400_000);
   const { data: series } = useFetch<Analytics>(
     (signal) => getAnalytics(undefined, from.toISOString(), to.toISOString(), signal),
-    [range],
+    [range, customFrom, customTo],
   );
 
   const daily = series?.daily ?? [];
@@ -55,8 +50,17 @@ export function OverviewPage() {
     );
   }
 
+  const rangePicker = (
+    <DateRangePicker
+      range={range}
+      customFrom={customFrom}
+      customTo={customTo}
+      onApply={apply}
+    />
+  );
+
   return (
-    <Shell tagline="Overview">
+    <Shell tagline="Overview" actions={rangePicker}>
       <div className="page-head">
         <div>
           <h1>Team overview</h1>
@@ -113,12 +117,6 @@ export function OverviewPage() {
               <h4>Team activity</h4>
               <p className="panel-sub">Messages sent per UTC day.</p>
             </div>
-            <ViewToggle
-              label="Date range"
-              value={range}
-              onChange={setRange}
-              options={Object.keys(RANGE_DAYS).map((r) => ({ value: r, label: r }))}
-            />
           </div>
           {!series ? (
             <div className="skel skel-chart" />
@@ -135,7 +133,7 @@ export function OverviewPage() {
                   values: daily.map((d) => Number(d.userMessages)),
                 },
               ]}
-              ariaLabel={`Messages per day over the last ${days} days`}
+              ariaLabel={`Messages per day, ${Math.round((to.getTime() - from.getTime()) / 86_400_000)} days`}
             />
           )}
         </section>
@@ -144,7 +142,13 @@ export function OverviewPage() {
           <div className="panel-head">
             <div>
               <h4>Model mix</h4>
-              <p className="panel-sub">Share of tokens, last {days} days.</p>
+              <p className="panel-sub">
+                Share of tokens,{' '}
+                {range === 'custom' && customFrom && customTo
+                  ? `${fmtDay(customFrom)} – ${fmtDay(customTo)}`
+                  : `last ${Math.round((to.getTime() - from.getTime()) / 86_400_000)} days`}
+                .
+              </p>
             </div>
           </div>
           {!series ? (

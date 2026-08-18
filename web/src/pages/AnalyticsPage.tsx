@@ -5,27 +5,22 @@ import { fmtCost, fmtDay, fmtDuration, fmtTokens } from '../format.js';
 import { Shell } from '../components/Shell.js';
 import { Kpi, KpiSkeleton } from '../components/Kpi.js';
 import { Icon } from '../components/Icon.js';
-import { ViewToggle } from '../components/ViewToggle.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { useFetch } from '../useFetch.js';
-import { usePref } from '../usePref.js';
+import { useDateRange, RANGE_PRESETS } from '../usePref.js';
 import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels, modelActiveMs, type ModelRow } from '../charts/palette.js';
 
-const RANGE_DAYS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 };
-
 export function AnalyticsPage() {
   const { author } = useParams();
   const identity = author ? decodeURIComponent(author) : undefined;
-  const [range, setRange] = usePref('range', '30d');
-  const days = RANGE_DAYS[range] ?? 30;
-
-  const to = new Date();
-  const from = new Date(to.getTime() - days * 86_400_000);
+  const { range, from, to, customFrom, customTo, apply } = useDateRange();
+  const days = RANGE_PRESETS[range];
 
   const { data, err, loading } = useFetch<Analytics>(
     (signal) => getAnalytics(identity, from.toISOString(), to.toISOString(), signal),
-    [identity, range],
+    [identity, range, customFrom, customTo],
   );
 
   const daily = data?.daily ?? [];
@@ -39,12 +34,17 @@ export function AnalyticsPage() {
     value: Number(m.tokens),
   }));
 
+  const rangeLabel =
+    range === 'custom' && customFrom && customTo
+      ? `${fmtDay(customFrom)} – ${fmtDay(customTo)}`
+      : `the last ${days ?? 30} days`;
+
   const rangeToggle = (
-    <ViewToggle
-      label="Date range"
-      value={range}
-      onChange={setRange}
-      options={Object.keys(RANGE_DAYS).map((r) => ({ value: r, label: r }))}
+    <DateRangePicker
+      range={range}
+      customFrom={customFrom}
+      customTo={customTo}
+      onApply={apply}
     />
   );
 
@@ -61,8 +61,8 @@ export function AnalyticsPage() {
         <div>
           <h1>{identity ? `${identity}’s analytics` : 'Analytics'}</h1>
           <p className="lede">
-            Models, tokens, sessions and cost over the last {days} days. Days are UTC buckets
-            computed at parse time, so a session spanning midnight is split across both days.
+            Models, tokens, sessions and cost over {rangeLabel}. Days are UTC buckets computed at
+            parse time, so a session spanning midnight is split across both days.
           </p>
         </div>
         {identity && (
@@ -97,7 +97,7 @@ export function AnalyticsPage() {
                   label="Sessions"
                   icon="message"
                   value={Number(data?.totals.sessions ?? 0).toLocaleString()}
-                  foot={`in the last ${days} days`}
+                  foot={`in ${rangeLabel}`}
                   primary
                 />
                 <Kpi

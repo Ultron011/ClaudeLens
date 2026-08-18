@@ -1,43 +1,13 @@
-import { useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { getModelAnalytics, type ModelDetail, type ModelAnalytics, type AuthorModelRow } from '../api.js';
-import { fmtCost, fmtDuration, fmtTokens } from '../format.js';
+import { fmtCost, fmtDay, fmtDuration, fmtTokens } from '../format.js';
 import { Shell } from '../components/Shell.js';
 import { Kpi, KpiSkeleton } from '../components/Kpi.js';
 import { Icon } from '../components/Icon.js';
-import { ViewToggle } from '../components/ViewToggle.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { useFetch } from '../useFetch.js';
-import { usePref } from '../usePref.js';
+import { useDateRange, RANGE_PRESETS } from '../usePref.js';
 import { foldModels, modelActiveMs } from '../charts/palette.js';
-
-// ---------------------------------------------------------------------------
-// Range helpers
-// ---------------------------------------------------------------------------
-
-const PRESET_RANGES = ['24h', '7d', '30d', '90d'] as const;
-type PresetRange = (typeof PRESET_RANGES)[number];
-
-function getRangeBounds(
-  range: string,
-  customFrom: string,
-  customTo: string,
-): { from: Date; to: Date } {
-  const to = new Date();
-  if (range === 'custom') {
-    const f = customFrom ? new Date(customFrom) : new Date(to.getTime() - 7 * 86_400_000);
-    const t = customTo ? new Date(customTo + 'T23:59:59Z') : to;
-    return { from: f, to: t };
-  }
-  const hours =
-    range === '24h' ? 24 : range === '7d' ? 168 : range === '30d' ? 720 : range === '90d' ? 2160 : 720;
-  return { from: new Date(to.getTime() - hours * 3_600_000), to };
-}
-
-function rangeLabel(range: string, days: number) {
-  if (range === '24h') return 'the last 24 hours';
-  if (range === 'custom') return 'the selected range';
-  return `the last ${days} days`;
-}
 
 // ---------------------------------------------------------------------------
 // Token composition bar (inline CSS stacked bar)
@@ -314,13 +284,7 @@ function TopToolsPanel({ tools }: { tools: Array<{ tool: string; uses: number }>
 export function ModelAnalyticsPage() {
   const { author } = useParams();
   const identity = author ? decodeURIComponent(author) : undefined;
-
-  const [range, setRange] = usePref('ma-range', '30d');
-  const [customFrom, setCustomFrom] = useState('');
-  const [customTo, setCustomTo] = useState('');
-
-  const { from, to } = getRangeBounds(range, customFrom, customTo);
-  const days = Math.round((to.getTime() - from.getTime()) / 86_400_000);
+  const { range, from, to, customFrom, customTo, apply } = useDateRange();
 
   const { data, err, loading } = useFetch<ModelAnalytics>(
     (signal) => getModelAnalytics(identity, from.toISOString(), to.toISOString(), signal),
@@ -329,41 +293,13 @@ export function ModelAnalyticsPage() {
 
   const models = data?.models ?? [];
   const totalCost = models.reduce((s, m) => s + Number(m.cost ?? 0), 0);
+  const rangeDesc =
+    range === 'custom' && customFrom && customTo
+      ? `${fmtDay(customFrom)} – ${fmtDay(customTo)}`
+      : `the last ${RANGE_PRESETS[range] ?? 30} days`;
 
   const rangeToggle = (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--s4)', flexWrap: 'wrap' }}>
-      <ViewToggle
-        label="Date range"
-        value={range}
-        onChange={setRange}
-        options={[
-          { value: '24h', label: '24h' },
-          { value: '7d', label: '7d' },
-          { value: '30d', label: '30d' },
-          { value: '90d', label: '90d' },
-          { value: 'custom', label: 'Custom' },
-        ]}
-      />
-      {range === 'custom' && (
-        <span style={{ display: 'flex', alignItems: 'center', gap: 'var(--s2)', fontSize: '0.85em' }}>
-          <input
-            type="date"
-            value={customFrom}
-            onChange={(e) => setCustomFrom(e.target.value)}
-            className="date-input"
-            aria-label="From date"
-          />
-          <span className="muted">→</span>
-          <input
-            type="date"
-            value={customTo}
-            onChange={(e) => setCustomTo(e.target.value)}
-            className="date-input"
-            aria-label="To date"
-          />
-        </span>
-      )}
-    </div>
+    <DateRangePicker range={range} customFrom={customFrom} customTo={customTo} onApply={apply} />
   );
 
   return (
@@ -383,8 +319,7 @@ export function ModelAnalyticsPage() {
         <div>
           <h1>{identity ? `${identity} — Model Analytics` : 'Model Analytics'}</h1>
           <p className="lede">
-            Compare model performance, costs, and token composition over{' '}
-            {rangeLabel(range, days)}.{' '}
+            Compare model performance, costs, and token composition over {rangeDesc}.{' '}
             {identity && (
               <>
                 Viewing one person's usage.{' '}
@@ -426,7 +361,7 @@ export function ModelAnalyticsPage() {
                   label="Models used"
                   icon="cpu"
                   value={String(models.filter((m) => m.model !== '<synthetic>').length)}
-                  foot={`in ${rangeLabel(range, days)}`}
+                  foot={`in ${rangeDesc}`}
                   primary
                 />
                 <Kpi

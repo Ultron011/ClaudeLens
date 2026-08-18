@@ -11,8 +11,9 @@ import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { ViewToggle } from '../components/ViewToggle.js';
 import { SessionList } from '../components/SessionList.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { DateRangePicker } from '../components/DateRangePicker.js';
 import { useFetch } from '../useFetch.js';
-import { usePref } from '../usePref.js';
+import { useDateRange, usePref, useLayoutPref } from '../usePref.js';
 
 const LIMIT = 50;
 
@@ -31,14 +32,17 @@ export function UserPage() {
   const { author = '' } = useParams<{ author: string }>();
   const [viewRaw, setView] = usePref('view', 'grouped');
   const view = viewRaw === 'flat' ? 'flat' : 'grouped';
-  const [layoutRaw, setLayout] = usePref('layout', 'table');
-  const layout = layoutRaw === 'cards' ? 'cards' : 'table';
+  const [layout, setLayout] = useLayoutPref();
+  const { range, from, to, customFrom, customTo, apply } = useDateRange();
 
   const {
     data: rows,
     err,
     refetch,
-  } = useFetch<SessionSummary[]>((signal) => listSessions({ author, limit: 500 }, signal), [author]);
+  } = useFetch<SessionSummary[]>(
+    (signal) => listSessions({ author, limit: 500, from: from.toISOString(), to: to.toISOString() }, signal),
+    [author, range, customFrom, customTo],
+  );
   const [pending, setPending] = useState<ProjectGroup | null>(null);
 
   // Flat view: a separate paginated fetch — grouped view keeps the full client-side grouping
@@ -54,12 +58,12 @@ export function UserPage() {
     setFlatOffset(0);
     setFlatDone(false);
     setFlatLoaded(false);
-  }, [author, view]);
+  }, [author, view, range, customFrom, customTo]);
 
   useEffect(() => {
     if (view !== 'flat') return;
     const ac = new AbortController();
-    listSessions({ author, limit: LIMIT, offset: flatOffset }, ac.signal)
+    listSessions({ author, limit: LIMIT, offset: flatOffset, from: from.toISOString(), to: to.toISOString() }, ac.signal)
       .then((page) => {
         setFlatRows((prev) => (flatOffset === 0 ? page : [...prev, ...page]));
         setFlatDone(page.length < LIMIT);
@@ -67,7 +71,7 @@ export function UserPage() {
       })
       .catch(() => setFlatLoaded(true));
     return () => ac.abort();
-  }, [author, view, flatOffset]);
+  }, [author, view, flatOffset, range, customFrom, customTo]);
 
   async function confirmDeleteSession() {
     if (!pendingSession) return;
@@ -122,10 +126,13 @@ export function UserPage() {
     <Shell
       crumbs={[{ label: author }]}
       actions={
-        <Link to={`/analytics/u/${encodeURIComponent(author)}`} className="chip">
-          <Icon name="chart" size={13} />
-          Analytics
-        </Link>
+        <>
+          <Link to={`/analytics/u/${encodeURIComponent(author)}`} className="chip">
+            <Icon name="chart" size={13} />
+            Analytics
+          </Link>
+          <DateRangePicker range={range} customFrom={customFrom} customTo={customTo} onApply={apply} />
+        </>
       }
     >
       <div className="page-head">
