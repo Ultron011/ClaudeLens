@@ -34,7 +34,8 @@ export type IconName =
   | 'home'
   | 'arrowUpRight'
   | 'sun'
-  | 'moon';
+  | 'moon'
+  | 'calendar';
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName;
@@ -165,6 +166,14 @@ const PATHS: Record<IconName, JSX.Element> = {
     </>
   ),
   moon: <path d="M13.5 9.35A5.75 5.75 0 0 1 6.65 2.5a5.75 5.75 0 1 0 6.85 6.85z" />,
+  calendar: (
+    <>
+      <rect x="2.5" y="3.25" width="11" height="10.5" rx="1.5" />
+      <path d="M2.5 6.75h11" />
+      <path d="M5.5 1.75v3" />
+      <path d="M10.5 1.75v3" />
+    </>
+  ),
 };
 
 /** The ClaudeLens brand mark.
