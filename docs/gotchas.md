@@ -59,6 +59,46 @@ Round corners on a table without clipping by setting `border-radius` on the four
 ```
 The rule to internalise: **any** non-`visible` overflow value — `hidden`, `clip`, `auto`, `scroll` — on an ancestor re-parents sticky descendants. "I only need it for the border radius" is not an exemption.
 
+**Second reprise — the mobile breakpoint was shipping the bug all along.** The `@media (max-width: 720px)` block above turns on `overflow-x: auto` *deliberately*, which re-parents the sticky `<thead>` exactly as described — but the header was never told to stop being sticky, so it kept `top: var(--topbar-h)` and rendered 60px inside the table. On `/u/:author` the Projects table collapsed to a ~40px sliver: one clipped row, the header band painted over it, a fragment of another row below. Nobody caught it because the desktop table, which is what gets looked at, was fine.
+
+The fix is `position: static` on `.data-table thead th` inside that block, **and a separate `top: auto` re-declaration for the header's first cell**:
+
+```css
+.data-table thead th { position: static; }
+/* (0,2,1) beats (0,1,2) — the rule above never reached this cell */
+.data-table th:first-child, .data-table td:first-child { position: sticky; left: 0; … }
+.data-table thead th:first-child { position: sticky; left: 0; top: auto; … }
+```
+
+The pinned-first-column rule `.data-table th:first-child` (one class, one pseudo-class, one type = 0,2,1) **outranks** `.data-table thead th` (one class, two types = 0,1,2), so `position: static` silently skipped the one cell the pseudo-class also matched. The header's first cell stayed sticky, kept inheriting the desktop `top`, and dropped 60px on its own while every neighbouring header cell sat correctly in flow — the overlap surviving in a single column, which looks like a rendering glitch rather than a cascade problem. When you neutralise a property on `thead th`, check every `:first-child`/`:last-child`/`:nth-*` rule that also matches those cells.
+
+Two more things have to be true before a phone table actually works, both of which were false here:
+
+- **`width: 100%` gives an overflow container nothing to scroll.** The table just compresses to fit, and `overflow-wrap: anywhere` lets it keep compressing by shattering words mid-token — a squeezed *and* clipped table, since N columns have a min-content floor no phone can honour. Use `width: auto; min-width: 100%` plus `white-space: nowrap` on the cells.
+- **A pinned first column needs a `max-width`.** With `nowrap`, a first cell holding `D:\office\BeyondChats` freezes 300px of column across a 390px viewport, leaving no room for the data being scrolled to. Cap it (`max-width: 42vw`) with `overflow: hidden; text-overflow: ellipsis`.
+
+Related, same family: `overflow-wrap: anywhere` on **numeric** cells breaks `$0.79` into `$0.7` / `9` across two lines. That isn't ugly, it misreads. Scope the `anywhere` to text columns and give `.num` `overflow-wrap: normal`.
+
+**Second reprise — the mobile breakpoint was carrying the bug in production.** The `@media (max-width: 720px)` block described above as "the tradeoff flips" turned on `overflow-x: auto` **without also turning off the sticky header**. `.data-table thead th` kept its desktop `position: sticky; top: var(--topbar-h)`, so on every phone-width viewport the header row rendered 60px *inside* the newly-created scroll container, painting over the first body rows — the Projects table on `/u/:author` collapsed to a ~40px sliver with one clipped row above the header and a fragment below it. Identical mechanism to the reprise above; the difference is only that the offending `overflow` was intentional this time.
+
+The fix has three parts, and the third is a specificity trap:
+
+```css
+@media (max-width: 720px) {
+  .table-scroll { overflow-x: auto; }
+  .data-table   { width: auto; min-width: 100%; }   /* or the container has nothing to scroll */
+  .data-table thead th { position: static; }
+  /* REQUIRED — `.data-table th:first-child` (0,2,1) outranks `.data-table thead th` (0,1,2),
+   * so the rule above never reached the header's first cell. It stayed sticky, kept `top: 60px`,
+   * and dropped "Title" 60px down the table while every other header cell sat in flow. */
+  .data-table thead th:first-child { position: sticky; left: 0; top: auto; }
+}
+```
+
+Note part two independently: a `width: 100%` table inside an `overflow-x: auto` wrapper **never scrolls** — it compresses to the container instead, and if the cells also carry `overflow-wrap: anywhere` it keeps compressing by shattering words mid-token. The result is a table that is squeezed *and* clipped at once, which reads as "the table is broken" without pointing at either cause. Pair `overflow-x: auto` with `min-width: max-content` (or `min-width: 100%; width: auto`) and `white-space: nowrap`, or it is decorative.
+
+**How to avoid**: whenever you add `overflow` at a breakpoint, grep the same stylesheet for `position: sticky` inside that subtree and neutralise it in the same block — then check that a `:first-child`/`:last-child`/`:hover` rule elsewhere isn't outranking your override on one cell.
+
 ## 5. CSS grid item overflow — `min-width: auto` forces the whole page to scroll horizontally
 
 **Symptom**: adding a wide `DataTable` inside a CSS grid track made the entire page scroll horizontally, not just the table. (The track was `.layout > .content` pre-redesign; the equivalent tracks now are `.app-main`, `.page` and every `.bento > *` — the rule is unchanged, only the selector names moved.)
