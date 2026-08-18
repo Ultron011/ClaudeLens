@@ -168,20 +168,26 @@ export function Chart({
 
         {n > 0 &&
           labels.map((l, i) => {
-            const step = Math.max(1, Math.ceil(n / 8));
+            // Label capacity is a function of WIDTH, not of series length. A fixed `ceil(n/8)`
+            // put eight "Aug 3"-sized labels under a 390px phone panel, where about four fit —
+            // they overlapped each other and the last one clipped past the plot's right edge.
+            // ~54px is the widest a `fmtDay` label gets plus breathing room.
+            const capacity = Math.max(2, Math.floor(innerW / 54));
+            const step = Math.max(1, Math.ceil(n / capacity));
+            // The last label is always drawn; drop the one before it when the step would leave
+            // them overlapping, rather than letting them collide.
             if (i !== 0 && i !== n - 1 && i % step !== 0) return null;
+            if (i !== 0 && i !== n - 1 && n - 1 - i < step / 2) return null;
+            // Bars are centred in their band; area/line points sit on xPoint(i). Using the
+            // band centre for both put every area-chart label about half a band off the point
+            // it names.
+            const x = kind === 'bars' ? xBand(i) + bandW / 2 : xPoint(i);
+            // The end labels sit ON the plot bounds, so centring them hangs half the text past
+            // the edge — where the SVG's `overflow: hidden` clips it. Anchoring them inward
+            // keeps the first and last dates readable, which on a phone are the two that matter.
+            const anchor = i === 0 ? 'start' : i === n - 1 ? 'end' : 'middle';
             return (
-              // Bars are centred in their band; area/line points sit on xPoint(i). Using the
-              // band centre for both put every area-chart label about half a band off the point
-              // it names.
-              <text
-                key={i}
-                x={kind === 'bars' ? xBand(i) + bandW / 2 : xPoint(i)}
-                y={height - 6}
-                textAnchor="middle"
-                fontSize={10}
-                fill="var(--text-faint)"
-              >
+              <text key={i} x={x} y={height - 6} textAnchor={anchor} fontSize={10} fill="var(--text-faint)">
                 {l}
               </text>
             );
