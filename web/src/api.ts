@@ -62,6 +62,7 @@ export interface Analytics {
   totals: AnalyticsTotals;
   daily: AnalyticsDaily[];
   models: AnalyticsModel[];
+  sessions: SessionSummary[];
 }
 
 export interface ModelDetail {

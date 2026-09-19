@@ -21,6 +21,13 @@ export const fmtTokens = (n: number) => {
 export const fmtDate = (s?: string) =>
   s ? new Date(s).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : '';
 
+export const fmtDateTime = (s?: string) =>
+  s
+    ? new Date(s).toLocaleString(undefined, {
+        year: 'numeric', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit',
+      })
+    : '';
+
 /** `daily` keys are 'YYYY-MM-DD' UTC calendar days — parsing them with `new Date(s)` reads them
  *  as local midnight, which is off by one day in any timezone behind UTC. Parse and render as UTC. */
 export const fmtDay = (s: string) =>

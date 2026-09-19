@@ -215,7 +215,7 @@ app.get('/api/analytics', async (req, res) => {
     `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
     ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
   try {
-    const [totalsQ, dailyQ, modelsQ] = await Promise.all([
+    const [totalsQ, dailyQ, modelsQ, sessionsQ] = await Promise.all([
       pool.query(
         `SELECT count(*)::int AS sessions,
                 sum((stats->>'turns')::int)::int AS turns,
@@ -248,6 +248,16 @@ app.get('/api/analytics', async (req, res) => {
           GROUP BY 1 ORDER BY "activeMs" DESC NULLS LAST`,
         args,
       ),
+      pool.query(
+        `SELECT id, session_id, title, author, project, git_branch, note, tags, featured, hidden,
+                stats, started_at, ended_at, created_at, account_email, account_display_name,
+                org_name, used_auto_mode, permission_modes, parser_version
+           FROM sessions
+          WHERE ${scopeWhere}
+          ORDER BY created_at DESC
+          LIMIT 500`,
+        args,
+      ),
     ]);
     // daily[].sessions counts a session on every day it was active (resumes span days), so it
     // won't sum to totals.sessions — that's activity, not a partition.
@@ -256,6 +266,7 @@ app.get('/api/analytics', async (req, res) => {
       totals: totalsQ.rows[0],
       daily: dailyQ.rows,
       models: modelsQ.rows,
+      sessions: sessionsQ.rows.map(summaryRow),
     });
   } catch (err) {
     console.error('analytics error:', err);

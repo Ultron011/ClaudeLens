@@ -1,7 +1,8 @@
 import type { ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
+import type { SessionSummary } from '@claudelens/shared';
 import { getAnalytics, type Analytics } from '../api.js';
-import { fmtCost, fmtDay, fmtDuration, fmtTokens } from '../format.js';
+import { fmtCost, fmtDateTime, fmtDay, fmtDuration, fmtTokens, msgCount } from '../format.js';
 import { Shell } from '../components/Shell.js';
 import { Kpi, KpiSkeleton } from '../components/Kpi.js';
 import { Icon } from '../components/Icon.js';
@@ -11,6 +12,7 @@ import { useDateRange, RANGE_PRESETS } from '../usePref.js';
 import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels, modelActiveMs, type ModelRow } from '../charts/palette.js';
+import { DataTable, type Column } from '../components/DataTable.js';
 
 export function AnalyticsPage() {
   const { author } = useParams();
@@ -27,6 +29,7 @@ export function AnalyticsPage() {
   const labels = daily.map((d) => fmtDay(d.day));
   const { rows, other } = foldModels(data?.models ?? []);
   const modelRows = other ? [...rows, other] : rows;
+  const sessions = data?.sessions ?? [];
   const slices = modelRows.map((m) => ({
     key: m.model,
     label: m.model,
@@ -253,6 +256,22 @@ export function AnalyticsPage() {
             <section className="panel col-12">
               <div className="panel-head">
                 <div>
+                  <h4>Sessions</h4>
+                  <p className="panel-sub">Most recent sessions in the selected range.</p>
+                </div>
+              </div>
+              {loading && !data ? (
+                <div className="skel" style={{ height: 220, borderRadius: 'var(--r-lg)' }} />
+              ) : sessions.length === 0 ? (
+                <p className="muted">No sessions in this range.</p>
+              ) : (
+                <AnalyticsSessionsTable sessions={sessions} />
+              )}
+            </section>
+
+            <section className="panel col-12">
+              <div className="panel-head">
+                <div>
                   <h4>Models</h4>
                   <p className="panel-sub">
                     Active time is measured where the transcript records it, else estimated from
@@ -294,6 +313,26 @@ export function AnalyticsPage() {
 
 /** Keeps the chart slot the same height whether it's loading, empty, or drawn — so the bento
  *  never reflows as the four panels resolve. */
+function AnalyticsSessionsTable({ sessions }: { sessions: SessionSummary[] }) {
+  const columns: Column<SessionSummary>[] = [
+    { key: 'person', header: 'Person', sortable: true, sortValue: (s) => s.author, render: (s) => (
+      <Link to={`/u/${encodeURIComponent(s.author)}`} className="person">
+        <span className="avatar" style={{ width: 26, height: 26, fontSize: 11 }} aria-hidden>{s.author.slice(0, 1).toUpperCase()}</span>
+        {s.displayName ?? s.author}
+      </Link>
+    ) },
+    { key: 'account', header: 'Account', sortable: true, sortValue: (s) => s.accountEmail ?? s.orgName ?? '', render: (s) =>
+      s.accountEmail || s.orgName ? <span title={s.orgName ?? undefined}>{s.accountEmail ?? s.orgName}</span> : <span className="muted">—</span> },
+    { key: 'title', header: 'Session title', sortable: true, sortValue: (s) => s.title, render: (s) => <Link to={`/session/${s.id}`}>{s.title}</Link> },
+    { key: 'messages', header: 'Messages', numeric: true, sortable: true, sortValue: (s) => msgCount(s.stats), render: (s) => msgCount(s.stats) },
+    { key: 'model', header: 'Model used', sortable: true, sortValue: (s) => s.stats.models.join(', '), render: (s) => s.stats.models.join(', ') || Object.keys(s.stats.modelUsage).join(', ') || '—' },
+    { key: 'cost', header: 'Cost', numeric: true, sortable: true, sortValue: (s) => s.stats.estimatedCostUsd ?? 0, render: (s) => fmtCost(s.stats.estimatedCostUsd) },
+    { key: 'created', header: 'Created', sortable: true, sortValue: (s) => s.createdAt, render: (s) => fmtDateTime(s.createdAt) },
+    { key: 'duration', header: 'Duration', numeric: true, sortable: true, sortValue: (s) => s.stats.durationMs ?? 0, render: (s) => fmtDuration(s.stats.durationMs) || '—' },
+  ];
+  return <DataTable columns={columns} rows={sessions} rowKey={(s) => s.id} caption="Sessions in the selected analytics range" ariaLabel="Sessions in the selected analytics range" />;
+}
+
 function ChartOrSkeleton({
   loading,
   empty,
