@@ -324,6 +324,7 @@ function AnalyticsSessionsTable({ sessions }: { sessions: SessionSummary[] }) {
     { key: 'account', header: 'Account', sortable: true, sortValue: (s) => s.accountEmail ?? s.orgName ?? '', render: (s) =>
       s.accountEmail || s.orgName ? <span title={s.orgName ?? undefined}>{s.accountEmail ?? s.orgName}</span> : <span className="muted">—</span> },
     { key: 'title', header: 'Session title', sortable: true, sortValue: (s) => s.title, render: (s) => <Link to={`/session/${s.id}`}>{s.title}</Link> },
+    { key: 'directory', header: 'Directory', sortable: true, sortValue: (s) => s.cwd ?? s.project ?? '', render: (s) => <span className="mono" title={s.cwd ?? s.project}>{s.cwd ?? s.project ?? '—'}</span> },
     { key: 'messages', header: 'Messages', numeric: true, sortable: true, sortValue: (s) => msgCount(s.stats), render: (s) => msgCount(s.stats) },
     { key: 'model', header: 'Model used', sortable: true, sortValue: (s) => s.stats.models.join(', '), render: (s) => s.stats.models.join(', ') || Object.keys(s.stats.modelUsage).join(', ') || '—' },
     { key: 'cost', header: 'Cost', numeric: true, sortable: true, sortValue: (s) => s.stats.estimatedCostUsd ?? 0, render: (s) => fmtCost(s.stats.estimatedCostUsd) },

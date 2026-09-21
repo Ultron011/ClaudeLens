@@ -32,6 +32,7 @@ function summaryRow(r: any) {
     title: r.title,
     author: r.author,
     project: r.project ?? undefined,
+    cwd: r.cwd ?? undefined,
     gitBranch: r.git_branch ?? undefined,
     note: r.note ?? undefined,
     tags: r.tags ?? [],
@@ -103,10 +104,10 @@ app.post('/api/sessions', async (req, res) => {
       `INSERT INTO sessions
          (session_id, title, author, author_email, project, git_branch, note, tags, stats, transcript,
           started_at, ended_at, account_email, account_display_name, org_name, used_auto_mode,
-          permission_modes, parser_version)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+          permission_modes, parser_version, cwd)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
        ON CONFLICT (session_id, author) DO UPDATE SET
-         title=EXCLUDED.title, project=EXCLUDED.project, git_branch=EXCLUDED.git_branch,
+         title=EXCLUDED.title, project=EXCLUDED.project, cwd=EXCLUDED.cwd, git_branch=EXCLUDED.git_branch,
          note=COALESCE(EXCLUDED.note, sessions.note),
          tags=CASE WHEN cardinality(EXCLUDED.tags) > 0 THEN EXCLUDED.tags ELSE sessions.tags END,
          stats=EXCLUDED.stats,
@@ -138,6 +139,7 @@ app.post('/api/sessions', async (req, res) => {
         s.stats?.usedAutoMode ?? false,
         s.stats?.permissionModes ?? [],
         s.parserVersion ?? 0,
+        s.cwd ?? null,
       ],
     );
     res.json({ id: rows[0].id, url: `/session/${rows[0].id}` });
@@ -188,7 +190,7 @@ app.get('/api/sessions', async (req, res) => {
   const offset = Math.max(Number(req.query.offset) || 0, 0);
   args.push(limit, offset);
 
-  const sql = `SELECT id, session_id, title, author, project, git_branch, note, tags, featured, hidden,
+  const sql = `SELECT id, session_id, title, author, project, cwd, git_branch, note, tags, featured, hidden,
                       stats, started_at, ended_at, created_at, account_email, account_display_name,
                       org_name, used_auto_mode, permission_modes, parser_version
                FROM sessions
@@ -249,7 +251,7 @@ app.get('/api/analytics', async (req, res) => {
         args,
       ),
       pool.query(
-        `SELECT id, session_id, title, author, project, git_branch, note, tags, featured, hidden,
+        `SELECT id, session_id, title, author, project, cwd, git_branch, note, tags, featured, hidden,
                 stats, started_at, ended_at, created_at, account_email, account_display_name,
                 org_name, used_auto_mode, permission_modes, parser_version
            FROM sessions

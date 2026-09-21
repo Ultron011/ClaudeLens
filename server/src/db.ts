@@ -38,6 +38,7 @@ CREATE INDEX IF NOT EXISTS sessions_tags_idx     ON sessions USING gin (tags);
 // v2: identity, auto-mode, parser version, and delete stickiness. SCHEMA above is frozen —
 // every new column lives here, added with ADD COLUMN IF NOT EXISTS so this is safe to re-run.
 export const MIGRATIONS = `
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS cwd                  text;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_email        text;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS account_display_name text;
 ALTER TABLE sessions ADD COLUMN IF NOT EXISTS org_name             text;

@@ -176,6 +176,7 @@ export interface SessionSummary {
   title: string;
   author: string;
   project?: string;
+  cwd?: string;
   gitBranch?: string;
   note?: string;
   tags: string[];
