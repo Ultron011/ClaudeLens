@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
 import { getAnalytics, type Analytics } from '../api.js';
@@ -21,7 +21,7 @@ export function AnalyticsPage() {
   const days = RANGE_PRESETS[range];
 
   const { data, err, loading } = useFetch<Analytics>(
-    (signal) => getAnalytics(identity, from.toISOString(), to.toISOString(), signal),
+    (signal) => getAnalytics(identity, from.toISOString(), to.toISOString(), signal, { limit: 10, offset: 0 }),
     [identity, range, customFrom, customTo],
   );
 
@@ -29,7 +29,36 @@ export function AnalyticsPage() {
   const labels = daily.map((d) => fmtDay(d.day));
   const { rows, other } = foldModels(data?.models ?? []);
   const modelRows = other ? [...rows, other] : rows;
-  const sessions = data?.sessions ?? [];
+  const [moreSessions, setMoreSessions] = useState<SessionSummary[]>([]);
+  const [moreLoading, setMoreLoading] = useState(false);
+  const [moreLoaded, setMoreLoaded] = useState(false);
+  const [moreHasMore, setMoreHasMore] = useState(false);
+
+  useEffect(() => {
+    setMoreSessions([]);
+    setMoreLoading(false);
+    setMoreLoaded(false);
+    setMoreHasMore(false);
+  }, [identity, range, customFrom, customTo]);
+
+  const sessions = [...(data?.sessions ?? []), ...moreSessions];
+  const hasMoreSessions = moreLoaded ? moreHasMore : Boolean(data?.sessionsHasMore);
+
+  async function loadMoreSessions() {
+    if (!hasMoreSessions || moreLoading) return;
+    setMoreLoading(true);
+    try {
+      const next = await getAnalytics(identity, from.toISOString(), to.toISOString(), undefined, {
+        limit: 10,
+        offset: sessions.length,
+      });
+      setMoreSessions((current) => [...current, ...next.sessions]);
+      setMoreHasMore(next.sessionsHasMore);
+      setMoreLoaded(true);
+    } finally {
+      setMoreLoading(false);
+    }
+  }
   const slices = modelRows.map((m) => ({
     key: m.model,
     label: m.model,
@@ -265,7 +294,7 @@ export function AnalyticsPage() {
               ) : sessions.length === 0 ? (
                 <p className="muted">No sessions in this range.</p>
               ) : (
-                <AnalyticsSessionsTable sessions={sessions} />
+                <AnalyticsSessionsTable sessions={sessions} hasMore={hasMoreSessions} loadingMore={moreLoading} onLoadMore={loadMoreSessions} />
               )}
             </section>
 
@@ -313,7 +342,7 @@ export function AnalyticsPage() {
 
 /** Keeps the chart slot the same height whether it's loading, empty, or drawn — so the bento
  *  never reflows as the four panels resolve. */
-function AnalyticsSessionsTable({ sessions }: { sessions: SessionSummary[] }) {
+function AnalyticsSessionsTable({ sessions, hasMore, loadingMore, onLoadMore }: { sessions: SessionSummary[]; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
   const columns: Column<SessionSummary>[] = [
     { key: 'person', header: 'Person', sortable: true, sortValue: (s) => s.author, render: (s) => (
       <Link to={`/u/${encodeURIComponent(s.author)}`} className="person">
@@ -331,7 +360,18 @@ function AnalyticsSessionsTable({ sessions }: { sessions: SessionSummary[] }) {
     { key: 'created', header: 'Created', sortable: true, sortValue: (s) => s.createdAt, render: (s) => fmtDateTime(s.createdAt) },
     { key: 'duration', header: 'Duration', numeric: true, sortable: true, sortValue: (s) => s.stats.durationMs ?? 0, render: (s) => fmtDuration(s.stats.durationMs) || '—' },
   ];
-  return <DataTable columns={columns} rows={sessions} rowKey={(s) => s.id} caption="Sessions in the selected analytics range" ariaLabel="Sessions in the selected analytics range" />;
+  return (
+    <>
+      <DataTable columns={columns} rows={sessions} rowKey={(s) => s.id} caption="Sessions in the selected analytics range" ariaLabel="Sessions in the selected analytics range" className="analytics-sessions-table" />
+      {hasMore && (
+        <div className="load-more-wrap">
+          <button type="button" className="chip" onClick={onLoadMore} disabled={loadingMore}>
+            {loadingMore ? 'Loading…' : 'Load more sessions'}
+          </button>
+        </div>
+      )}
+    </>
+  );
 }
 
 function ChartOrSkeleton({

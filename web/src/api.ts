@@ -63,6 +63,7 @@ export interface Analytics {
   daily: AnalyticsDaily[];
   models: AnalyticsModel[];
   sessions: SessionSummary[];
+  sessionsHasMore: boolean;
 }
 
 export interface ModelDetail {
@@ -153,8 +154,9 @@ export function getAnalytics(
   from?: string,
   to?: string,
   signal?: AbortSignal,
+  sessionPage?: { limit?: number; offset?: number },
 ): Promise<Analytics> {
-  return get(`/api/analytics?${qs({ identity, from, to })}`, signal);
+  return get(`/api/analytics?${qs({ identity, from, to, sessionLimit: sessionPage?.limit, sessionOffset: sessionPage?.offset })}`, signal);
 }
 
 export async function patchSession(

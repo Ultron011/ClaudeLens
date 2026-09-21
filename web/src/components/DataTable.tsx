@@ -18,11 +18,12 @@ export interface DataTableProps<T> {
   /** Visually hidden — names the table for screen reader users. */
   caption: string;
   ariaLabel: string;
+  className?: string;
 }
 
 /** One generic sortable table, used for every list on the site. Wrapped in `.table-scroll`
  *  (tabIndex + role="region") so keyboard users can scroll it horizontally without a mouse. */
-export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel }: DataTableProps<T>) {
+export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel, className }: DataTableProps<T>) {
   const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
 
   const sorted = sort
@@ -41,7 +42,7 @@ export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel }: Data
   }
 
   return (
-    <div className="table-scroll" tabIndex={0} role="region" aria-label={ariaLabel}>
+    <div className={className ? "table-scroll " + className : "table-scroll"} tabIndex={0} role="region" aria-label={ariaLabel}>
       <table className="data-table">
         <caption className="sr-only">{caption}</caption>
         <thead>

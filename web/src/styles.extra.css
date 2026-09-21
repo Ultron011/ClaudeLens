@@ -87,6 +87,21 @@
 :root[data-theme='dark'] .dr-label input[type='date'] { color-scheme: dark; }
 
 /* ---- tables ---- */
+.analytics-sessions-table {
+  overflow-x: auto;
+}
+.analytics-sessions-table .data-table thead th {
+  top: 0;
+}
+.analytics-sessions-table .data-table {
+  min-width: 1180px;
+}
+.load-more-wrap {
+  display: flex;
+  justify-content: center;
+  padding: var(--s4) 0 0;
+}
+
 .view-toggle { display: flex; }
 
 /* Grid items default to min-width:auto (their content's max-content size), so a wide table

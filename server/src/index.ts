@@ -213,6 +213,8 @@ app.get('/api/analytics', async (req, res) => {
   const args: unknown[] = [identity ?? null, from ?? null, to ?? null];
   // $1 is referenced unconditionally (and cast, so Postgres can type it) even org-wide: a query
   // text that never mentions $1 while still binding it fails with "could not determine data type".
+  const sessionLimit = Math.min(Math.max(Number(req.query.sessionLimit) || 10, 1), 100);
+  const sessionOffset = Math.max(Number(req.query.sessionOffset) || 0, 0);
   const scopeWhere =
     `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
     ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
@@ -257,7 +259,7 @@ app.get('/api/analytics', async (req, res) => {
            FROM sessions
           WHERE ${scopeWhere}
           ORDER BY created_at DESC
-          LIMIT 500`,
+          LIMIT ${sessionLimit + 1} OFFSET ${sessionOffset}`,
         args,
       ),
     ]);
@@ -268,7 +270,8 @@ app.get('/api/analytics', async (req, res) => {
       totals: totalsQ.rows[0],
       daily: dailyQ.rows,
       models: modelsQ.rows,
-      sessions: sessionsQ.rows.map(summaryRow),
+      sessions: sessionsQ.rows.slice(0, sessionLimit).map(summaryRow),
+      sessionsHasMore: sessionsQ.rows.length > sessionLimit,
     });
   } catch (err) {
     console.error('analytics error:', err);
