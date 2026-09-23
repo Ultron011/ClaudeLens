@@ -241,4 +241,4 @@ All routes are children of the `AppLayout` layout route.
 | `/analytics/u/:author` | `AnalyticsPage` (same component, `author` scopes the `identity` filter) | Per-person analytics — **not** nested under `/u/:author/analytics`, because a project's route segment is `basename(cwd)` and a real project could be named `analytics`. |
 | `/u/:author` | `UserPage` | One person: grouped-by-project (default) or flat sessions (`?view=`), each table/cards (`?layout=`). |
 | `/u/:author/:project` | `ProjectPage` | One project under one author: its sessions, project-level delete. |
-| `/session/:id` | `SessionPage` | One session's transcript: turns, tool calls, account/mode info, delete. |
+| `/session/:id` | `SessionPage` | One session's transcript: turns, tool calls, account/mode info, delete. Messages over one line (or >140 chars) collapse to a one-line preview (`CollapsibleText`) with an Expand/Collapse-all chip; AskUserQuestion calls render each question → answer, opening to options/picks/notes (`ToolCall.questions`, parser v6+). |

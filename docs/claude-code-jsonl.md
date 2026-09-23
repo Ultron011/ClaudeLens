@@ -17,7 +17,57 @@ file-history-snapshot: 227      custom-title: 168   agent-name: 168
 ai-title: 160     file-history-delta: 60          queue-operation: 22
 ```
 
-The parser reads only `user`, `assistant`, `permission-mode`, `system`, and `ai-title` (`parser.ts:199-220`). Everything else — `attachment`, `last-prompt`, `mode`, `file-history-snapshot`, `custom-title`, `agent-name`, `file-history-delta`, `queue-operation` — is on disk and currently ignored.
+The parser (≤v6) read only `user`, `assistant`, `permission-mode`, `system`, and `ai-title`; v7 also reads `cost-state` and `attachment` (`queued_command` only). Everything else — `attachment`, `last-prompt`, `mode`, `file-history-snapshot`, `custom-title`, `agent-name`, `file-history-delta`, `queue-operation` — is on disk and currently ignored.
+
+## 2026-09 re-census (594 main transcripts + 30 subagent dirs, Claude Code 2.1.239–2.1.280)
+
+```
+assistant: 23980  attachment: 18056  user: 13911  last-prompt: 4327  atis-latch: 4228
+ai-title: 3992    mode: 3184         permission-mode: 3015           bridge-session: 2871
+system: 1587      queue-operation: 1444  file-history-snapshot: 709  file-history-delta: 626
+cost-state: 407   agent-name: 156    frame-link: 92  agent-setting: 40  (+ a few rarer types)
+```
+
+What changed and what the parser (v7) now reads:
+
+- **One assistant line per content block.** An API message with thinking + text + 3 tool calls is
+  5 `assistant` lines sharing `message.id` / `requestId`, each carrying the **identical** `usage`
+  (verified: 12,216 messages, 11,785 extra split lines, 0 usage mismatches). Tool_result `user`
+  lines can sit *between* split lines (parallel tool calls). Summing usage per line inflated
+  tokens ~2× — the parser now counts once per `message.id` and merges the lines into one Turn.
+- **`usage.cache_creation.{ephemeral_5m_input_tokens, ephemeral_1h_input_tokens}`** splits cache
+  writes by TTL (Claude Code mostly writes 1h); `usage.server_tool_use.web_search_requests`.
+- **`cost-state`** — `{totalCostUSD, totalLinesAdded, totalLinesRemoved, startTime,
+  modelUsage: {model: {inputTokens, outputTokens, cacheReadInputTokens,
+  cacheCreationInputTokens, webSearchRequests, costUSD}}}`. Cumulative **per process run**
+  (`startTime`); a resumed run starts from zero, so take the last line per `startTime` and sum
+  runs. Includes subagent spend and background Haiku calls that never appear in the transcript.
+  Model keys may carry a `[1m]` suffix. This is the ground truth `pricing.ts` is calibrated on:
+  per model, `(costUSD − in·p_in − out·p_out − cr·p_cr) / cacheCreation` lands between 1.25× and
+  2× `p_in` on every line (exactly 2× when all writes were 1h); Haiku lines with no cache writes
+  have zero residual. Re-derive with a per-model least-squares over these lines.
+- **Subagent transcripts** moved out of the main file: `<projectDir>/<sessionId>/subagents/
+  agent-<id>.jsonl` (+ `agent-<id>.meta.json`: `{agentType, description, toolUseId, spawnDepth,
+  isFork?, model?}`). Lines are `isSidechain: true`; they have no `cost-state`. The CLI reads the
+  dir and passes it to `parseTranscript(jsonl, { subagents })`.
+- **`toolDenialKind`** is a top-level key on the tool_result carrier `user` line (`automode-blocked`
+  40, `user-rejected` 22, `permission-rule` 1); the tool_result itself is also `is_error`.
+- **Compaction**: `system` `compact_boundary` (with `compactMetadata`), followed by a `user` line
+  with `isCompactSummary: true, isVisibleInTranscriptOnly: true` ("This session is being continued
+  from a previous conversation…") — not typed by anyone.
+- **Interrupts**: `user` lines whose text is `[Request interrupted by user]` or `[Request
+  interrupted by user for tool use]`.
+- **`<synthetic>` assistant lines**: `isApiErrorMessage: true` with `error: "rate_limit"` ("You've
+  hit your session/weekly limit · resets …") or `model_not_found`; also non-error "No response
+  requested." fillers. Zero usage, not model output.
+- **`attachment` `queued_command`**: `commandMode: "prompt"` + `origin.kind: "human"` is a prompt
+  typed while Claude was busy (59 seen; only 4 later re-appear as a `user` line);
+  `commandMode: "task-notification"` is background-task output, not human.
+- **Auto mode is now common**: `permission-mode` lines `auto` 2957 / acceptEdits 40 / plan 20 /
+  default 15; on human `user` lines `auto` 682, `bypassPermissions` 366, `default` 55,
+  `acceptEdits` 17, `plan` 5. (The "`auto` never observed" note below is from the older sample.)
+- `system` subtypes: `stop_hook_summary` (718) then `turn_duration` (624) close each turn *after*
+  Stop hooks return — the detached sync waits for either at the file tail.
 
 ## Complete observed top-level key set
 

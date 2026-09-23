@@ -2,7 +2,15 @@
 
 Source of truth: `server/src/index.ts` — read it, don't trust this doc's line numbers (they
 drift); symbol/route names below are exact and grep-able. All routes are mounted directly on
-an `express()` app with `cors()` open and a `25mb` JSON body limit. In production the same
+an `express()` app with **no CORS** (the dashboard is same-origin), security headers (CSP with a
+hash of `index.html`'s inline theme script, `X-Frame-Options: DENY`, nosniff) and a one-line
+access log per `/api` call. Bodies: `25mb` only on `POST /api/sessions` (parsed *after* the
+token check); `100kb` everywhere else. nginx in front adds gzip, HSTS and a `limit_req` on
+`/api/`.
+
+**Errors**: bad input is a `400 { error }` (non-string / repeated query params, non-ISO
+`from`/`to`, malformed PATCH `tags`); a non-UUID `:id` is a `404`, as is any unknown `/api/*`
+path (JSON, not the SPA). `500 { error: '<label> failed' }` only for genuine server faults. In production the same
 process also serves the built `web/dist` SPA (static + catch-all fallback to `index.html`
 for non-`/api` `GET`s) — so the web app always calls relative `/api/*` paths, no base URL
 config needed.
@@ -15,10 +23,11 @@ open. When set, requires header `authorization: Bearer <token>`, else `401`.
 
 **Every other route, including both `DELETE` routes, is unauthenticated.** This is
 documented and intentionally not fixed here (README rule #8) — do not "fix" it as a
-drive-by.
+drive-by. Dashboard auth (SSO / basic auth in front of the whole site) is a known open item.
 
 ## `GET /api/health`
-`{ ok: true }`. No params, no auth.
+`{ ok: true }` after a `SELECT 1`; `503 { ok: false }` when the DB is unreachable. The compose
+healthcheck calls it, so a wedged pool marks the container unhealthy.
 
 ## `POST /api/sessions`
 Ingest endpoint the CLI's `Stop` hook and backfill both call.
@@ -38,6 +47,11 @@ Ingest endpoint the CLI's `Stop` hook and backfill both call.
   existing value (a later sync without account info never blanks a known one);
   `used_auto_mode` is **OR-ed** (a "did this session ever hit auto mode" fact, sticky true);
   `parser_version` takes `GREATEST` (never regresses).
+- **Server-side redaction**: `turns`, `title` and `stats.firstUserPrompt` are always run through
+  `redactDeep`/`redactText` before storage, whatever the client's `redact` setting.
+- **Stale guard**: the `DO UPDATE` only applies when `EXCLUDED.parser_version >=` the stored one
+  and `endedAt` isn't older than the stored `ended_at`. A skipped update still answers `200
+  { id, url, stale: true }` — the row exists; the CLI treats it as success.
 - Success: `{ id, url: "/session/<id>" }`. Failure: `500 { error: 'ingest failed' }`.
 
 ## `GET /api/sessions`
@@ -49,16 +63,17 @@ Query params (all optional except none are required):
 | Param | Effect |
 |---|---|
 | `author` | exact match on `author` column |
-| `project` | exact match on `project` column |
+| `project` | exact match on `project`; the sentinel `(no project)` means `project IS NULL` |
 | `tag` | `tag = ANY(tags)` |
 | `featured=true` | `featured = true` |
 | `identity` | `account_email = ? OR (account_email IS NULL AND author = ?)` — the coalesced grouping key, prefer over `author` |
 | `autoMode=true` | `used_auto_mode = true` |
 | `from` | `started_at >= from` |
 | `to` | `started_at < to` |
-| `q` | `ILIKE` over `title`, `note`, `author` |
+| `q` | `ILIKE` over `title`, `note`, `author`, `project` |
+| `inTranscript=true` | with `q`: also word-match via `search_tsv @@ websearch_to_tsquery('simple', q)` (GIN index — never `ILIKE` the transcript itself) |
 | `includeHidden=true` | otherwise `hidden = false` is always applied |
-| `sort` | `cost` → `estimatedCostUsd` desc; `turns` → Claude-side `stats.turns` desc; `messages` → coalesced human message count desc (see below); anything else (default) → `featured DESC, created_at DESC` |
+| `sort` | `orderFor()`: `cost`, `turns`, `messages` (coalesced, see below), `tokens`, `featured` (featured first, then newest), default/`recent` → `started_at DESC`. Any of them + `_asc` flips direction. Only these literals reach SQL. |
 | `limit` | default 100, clamped to `[1, 500]` |
 | `offset` | default 0, clamped to `>= 0` |
 
@@ -104,6 +119,19 @@ Response shape:
   `models[].sessions` (a session using two models counts once per model).
 - `models[].measured` is `bool_and(...)` across every session contributing to that model —
   `true` only if every contributing session had real `turn_duration` data.
+
+`/api/analytics` and `/api/model-analytics` share `analyticsScope()`: `identity`, `from`, `to`,
+and **`project`** (same `(no project)` sentinel). `/api/analytics` also takes `sessionLimit`,
+`sessionOffset` and `sessionSort` (same values as `sort` above) for its sessions table.
+`/api/model-analytics` `tools[]` rows carry `errors` (summed `stats.toolErrors`, parser v7+;
+older rows contribute 0, so rates are a floor until they re-sync).
+
+## `GET /api/projects?author=&from=&to=`
+One person's projects aggregated server-side (the User page used to fold ≤500 fetched rows):
+`{ totals: { sessions, projects, turns, messages, tokens, cost }, projects: [{ project,
+sessions, turns, messages, tokens, cost, lastActivity, skills[] }], skills: [{ skill, uses }] }`.
+`project` is `(no project)` for NULL. Skills are aggregated in their own CTE — joining them
+per row would multiply every sum by the skill count. `author` is required (`400` otherwise).
 
 ## `GET /api/stats`
 Aggregate stats for the org-wide leaderboard/value panel. No params, no filters (there is

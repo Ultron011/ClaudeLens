@@ -9,7 +9,10 @@ the shape reference plus the invariants and legacy contract an agent must not vi
   `docs/claude-code-jsonl.md` for the full observed key set and per-key provenance.
 - `Turn` — one normalized transcript entry: `role`, `text`, `thinking`, `toolCalls`,
   `permissionMode` (carried forward from the last-seen mode, see below).
-- `ToolCall` — `{ name, detail?, args? }`.
+- `ToolCall` — `{ name, detail?, args?, questions?, declined?, error?, denied? }`. `error`
+  (v7) = the tool_result came back `is_error` and was not a denial; `denied` (v7) = the line's
+  `toolDenialKind` (`user-rejected`, `automode-blocked`, `permission-rule`, …) — a denial sets
+  `denied` only, never `error`.
   - `detail` — **frozen meaning**: for `Skill` calls, the skill id; for `Task`/`Agent`
     calls, `subagent_type` (or `description`). Nothing else ever sets it. `stats.skills`,
     `stats.subagents`, and the live `/api/stats` `skills`/`tools` SQL all key off this exact
@@ -46,6 +49,30 @@ the shape reference plus the invariants and legacy contract an agent must not vi
     `userMessages` field — a human message isn't attributable to a model, and there is no
     correct way to attribute it.
   - `activeMsMeasured` — session-wide version of `ModelUsage.measured`.
+  - **v7 additions (all optional — absent on older rows):** `toolErrors` (tool → failed calls),
+    `toolDenials` (denial kind → count), `subagentUsage` (agentType → `{runs, totalTokens,
+    costUsd, toolCalls}`), `interrupts`, `compactions`, `apiErrors`, `rateLimitHits`,
+    `reported` (`{costUsd, linesAdded, linesRemoved}` from Claude Code's `cost-state` lines:
+    last line per run/`startTime`, summed across runs; absent when the file has none).
+  - **Token/cost accounting (v7):** Claude Code writes one assistant line per content block, all
+    sharing `message.id` with identical `usage`. Usage is counted once per `message.id`
+    (fallback `requestId`), and the split lines merge into ONE `Turn` — so `turns`,
+    `assistantTurns`, `modelUsage.turns` and `daily.turns` count API messages, not blocks.
+    Before v7 tokens were ~2× and cost ~2–5× inflated (see `claude-code-jsonl.md`).
+  - **Subagents (v7):** `<session>/subagents/agent-*.jsonl` usage folds into the token totals,
+    `estimatedCostUsd`, `modelUsage` tokens/cost, `daily` tokens/cost and `toolUsage` — but NOT
+    into `turns`/`assistantTurns`/`modelUsage.turns`/`daily.turns` (so
+    `sum(modelUsage.turns) === assistantTurns` still holds; a subagent-only model can have
+    `turns: 0`). Subagent turns are never added to `Turn[]`.
+  - **Excluded from messages/turns (v7):** compaction summaries (`isCompactSummary` /
+    `isVisibleInTranscriptOnly` user lines — dropped entirely), `[Request interrupted by user…]`
+    lines (→ `interrupts`), `<synthetic>`/`isApiErrorMessage` assistant lines (→ `apiErrors`,
+    `rateLimitHits`; not in `models`/`modelUsage`). A `queued_command` attachment (prompt typed
+    mid-turn, `origin.kind: human`) becomes a user turn only if the same text never reappears as a
+    later `user` line.
+  - **Pricing (`shared/src/pricing.ts`):** calibrated against `cost-state`. Cache writes are
+    split by TTL: `cache_creation.ephemeral_5m_input_tokens` at 1.25× input,
+    `ephemeral_1h_input_tokens` at 2× (no breakdown → all 5m); web search $10/1000.
 - `ParsedSession.parserVersion: number` — see versioning contract below.
 - `AccountIdentity` — `{email?, displayName?, organizationName?}`. Read from
   `~/.claude.json → oauthAccount` at sync time (see `architecture.md` for the "not
@@ -130,13 +157,14 @@ clock — `durationMs` (session-level) stays the honest upper bound.
 
 ## Versioning / legacy contract
 
-`PARSER_VERSION` (`shared/src/parser.ts`, currently **3**) is stamped on every
+`PARSER_VERSION` (`shared/src/parser.ts`, currently **7**) is stamped on every
 `ParsedSession.parserVersion` and stored per-row as `sessions.parser_version` (upsert takes
 `GREATEST(EXCLUDED.parser_version, sessions.parser_version)`, so a stale re-POST never
 regresses the stored version). It exists so a future shape-changing parser bump can make old
-rows eligible for re-upload — **but note the backfill-side ledger
-(`cli/src/history.ts`'s `backfilledSessions: string[]`) is not currently version-aware**;
-see `docs/architecture.md`'s backfill section for the exact gap.
+rows eligible for re-upload: the CLI's ledger (`cfg.backfilled` session → version,
+`cfg.backfilledMtime` session → transcript mtime) is written by both live sync and backfill,
+and the `SessionStart` catch-up re-uploads ledgered sessions whose version is behind — see
+`docs/architecture.md`'s backfill section.
 
 **Old rows can never be upgraded server-side.** The stored `transcript` column is `Turn[]`,
 which — for rows written before this feature — never carried per-turn `usage`, so

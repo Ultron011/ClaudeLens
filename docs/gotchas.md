@@ -171,3 +171,27 @@ This must print nothing. Add it to the verification list after any git-based fil
 - **`tsx` resolves from package directories, not the repo root** — pnpm's workspace layout doesn't hoist dependencies to a root `node_modules` the way npm/yarn classic do. Confirmed: `node --import tsx --test shared/test/parser.test.ts` run from the repo root fails with `ERR_MODULE_NOT_FOUND`; the same test passes when invoked as `pnpm --filter shared test` (which runs the `node --import tsx --test` script with `shared/` as the working directory). Always run package scripts via `pnpm --filter <pkg> <script>`, never by pointing a root-level `tsx`/`node` invocation at a file path inside a package.
 - **`ls` is aliased to `eza` on this machine** — passing a path can fail with `invalid value ... for '--icons'`. Use `find` in scripts.
 - **`cfg.server` from `~/.claude/claudelens.json` takes precedence over the `CLAUDELENS_SERVER` env var** (`config.ts:77`). To point the CLI at a test server you must override `HOME` (config lives at `join(homedir(), '.claude', 'claudelens.json')`) — and if you also need account identity, set `CLAUDE_CONFIG_DIR` to the real home, since `account.ts` reads `$CLAUDE_CONFIG_DIR/.claude.json` separately.
+
+## Pool `statement_timeout` cancelled a boot migration → prod crash-loop (2026-09-23)
+
+**Symptom**: after a deploy the app container restarted forever; logs ended in a pg error with
+`routine: 'ProcessInterrupts'`. The dashboard was down ~4 minutes.
+
+**Root cause**: `db.ts` gives the pool `statement_timeout: 20000` (so a stalled query fails a
+request instead of hanging it). `start()` ran `SCHEMA`/`MIGRATIONS` through that same pool, and
+the new `search_tsv` generated column rewrites the whole table (~40 s on prod) — Postgres
+cancelled it at 20 s, `start()` threw, the process exited, compose restarted it, repeat.
+
+**Fix**: migrations run on a dedicated client with `SET statement_timeout = 0`, released with
+`release(true)` so that session never returns to the pool. **How to avoid**: any migration that
+rewrites or indexes `sessions` is slow at prod size — test it against a restore of the prod
+backup (`scripts/backup-db.sh` output → `pg_restore` into the dev DB), not an empty dev DB.
+
+## Playwright `text=` waits inflate render timings on big transcripts
+
+Timing "Expand all" with `waitForSelector('text=Collapse all')` reported 3–5 s; measured in-page
+(click → two `requestAnimationFrame`s) it was ~200 ms. The text engine scans every text node,
+so anything that adds per-turn text (timestamps) makes the *measurement* slower, not the page.
+Measure inside the page. Separately, real: `Date#toLocale*String` builds a new Intl formatter per
+call — use the cached formatters in `web/src/format.ts` for anything rendered per turn.
+

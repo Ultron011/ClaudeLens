@@ -93,3 +93,18 @@ curl -s localhost:4000/api/stats | jq '.totals'
 # {"sessions":37,"authors":4,"cost":"2601.64"}
 ```
 To add more realistic demo data for UI work, the pattern used to build the existing 37 is: run the CLI's history-backfill path (`cli/src/history.ts`) against real transcripts already on disk under `~/.claude/projects/*/*.jsonl`, which reuses the exact same `parseTranscript` + upsert path as a live session sync — so seeded data is indistinguishable from organically-synced data. From inside a Claude Code session with the plugin connected, `/claudelens:sync-history` is the user-facing entry point (lists every project under `~/.claude/projects`, lets you pick which to sync, uploads all their past sessions). Do **not** hand-write large synthetic transcript fixtures for seeding the *dashboard* (as opposed to unit-test fixtures, where a small synthetic one is exactly right — see `docs/gotchas.md`'s near-miss about committing a 952 KB real transcript as a *test* fixture, which is the opposite problem: real data landing somewhere it shouldn't, in that case a public git artifact).
+
+## Prod data ops (run inside the app container)
+
+```bash
+# Merge one person's author name into another (dry run without --apply). Records an alias so
+# future uploads under the old name land on the canonical one.
+docker exec -w /app/server claudelens-app-1 node --import tsx src/merge-authors.ts SAURABH Saurabh --apply
+# Re-run server-side secret redaction over stored rows (idempotent; dry run without --apply).
+docker exec -w /app/server claudelens-app-1 node --import tsx src/redact-existing.ts --apply
+```
+
+Backups: `scripts/backup-db.sh` runs nightly from the ubuntu crontab (03:15 UTC) into
+`~/backups/claudelens`, 14-day retention, local disk only. Restore / rehearse a migration:
+`docker exec -i claudelens-pg pg_restore -U claudelens -d claudelens --clean --if-exists --no-owner < FILE`
+(dev DB). Take a fresh backup before any prod data op.

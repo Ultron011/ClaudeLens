@@ -10,12 +10,19 @@ the sync-trigger/re-upload cost, and the plugin install/update path.
 Claude Code session
   → Stop hook fires (once per assistant turn)
   → node plugin/dist/claudelens.mjs sync   (cli/src/sync.ts: runSync)
-      reads hook stdin {session_id, transcript_path, cwd}
-      loadConfig() (cli/src/config.ts) → shouldSync() gate (see below)
-      readSettledSession(): parseTranscript() + poll up to 10×250ms until the
-        last turn is role:"assistant" (Stop fires before the reply is flushed to disk)
-      optional redactDeep() over turns + firstUserPrompt (cfg.redact, default false)
+      reads hook stdin {session_id, transcript_path, cwd}; cheap gate (connected/paused/env),
+        then re-spawns itself detached (`sync --detached`, payload in CLAUDELENS_HOOK_PAYLOAD)
+        and exits — the hook returns in ~0.2 s (node startup)
+      detached child: loadConfig() (cli/src/config.ts) → shouldSync() gate (see below)
+      readSettledSession(): poll the file (≤20×250ms) until its last line is a system
+        stop_hook_summary / turn_duration (the turn is fully on disk), then
+        parseTranscript(jsonl, { subagents }) — subagents read from <session>/subagents/
+      uploadSession() (cli/src/upload.ts): redactDeep() over turns + title + firstUserPrompt
+        (cfg.redact, default TRUE), POST with a 15 s AbortSignal.timeout
       POST /api/sessions  { session: ParsedSession, author, account?, ... }
+      on success: ledger backfilled[id] = PARSER_VERSION, backfilledMtime[id] = file mtime
+  → SessionStart hook: `claudelens.mjs catchup` — detached, re-uploads ≤25 stale ledgered
+      sessions (see "Backfill path")
   → server/src/index.ts: POST /api/sessions
       tombstone check against `deletions` table (see data-model.md) — if hit, return
         200 {ignored:true, untrack:{...}} (never 4xx; the Stop hook is fire-and-forget)
@@ -118,17 +125,29 @@ working tree. Consequences:
 
 Two ops behind `/claudelens:sync-history`: `list-projects` (peeks the first ~80 lines of
 each `.jsonl` under `~/.claude/projects/<dir>` for `cwd`/`sessionId`, no full parse) and
-`sync-history` (full `parseTranscript` + the same POST as live sync, per selected project
-dir). Skip logic: `!force && cfg.backfilledSessions.includes(session.sessionId)` — this is a
-**plain "ever uploaded" list, not a version ledger**. Note the discrepancy: the parser
-bumped `PARSER_VERSION` to 3 (`shared/src/parser.ts`) expecting old sessions to become
-re-sync-eligible on a version bump, but `history.ts`'s `backfilledSessions: string[]` has no
-version field to compare against — a session backfilled once is skipped forever unless the
-caller passes `--force`. (Live `Stop`-hook sync is unaffected by this ledger; it always
-re-uploads every turn regardless, so `parser_version` still advances correctly for actively
-worked-on sessions — only the backfill skip-list is stale-sync-version-blind.) `saveConfig`
-is called after each project directory finishes, so an interrupted bulk backfill doesn't
-re-upload everything on retry — only the in-flight project's partial progress is lost.
+`sync-history` (full parse incl. subagents + the same `uploadSession()` as live sync, per
+selected project dir).
+
+**The ledger** (`~/.claude/claudelens.json`): `backfilled` maps session id → the
+`PARSER_VERSION` that last uploaded it (`0` = live sync attempted, never landed), and
+`backfilledMtime` maps session id → the transcript's mtime at that upload. Live sync writes
+both on every successful upload; backfill writes them per project. A session is *current* when
+`version >= PARSER_VERSION` and the file's mtime ≤ the recorded one; sync-history skips current
+sessions unless `--force`.
+
+**SessionStart catch-up** (`history.ts: catchUp`, `plugin/hooks/hooks.json`): detached, scans
+every project dir for files whose session id is **already in the ledger** (so it never uploads
+history the user never opted into) and that are not current — a parser bump, an offline
+failure (version 0), or lines written after the final Stop hook (its `turn_duration`, the
+exit-time `cost-state`). Newest first, capped at 25 per run; the rest follow on later session
+starts. Same `shouldSync` gate and tombstone handling as backfill.
+
+**Config writes are merges** (`config.ts: updateConfig`): each writer reloads the file, changes
+only its own keys (ledger entries via `recordSynced`, one list entry for untrack, …) and writes
+atomically (`<path>.<pid>.tmp` + rename), so a long backfill can't clobber an untrack/pause made
+meanwhile. `backfillDirs` also reloads the config per project, so a pause stops it at the next
+project. Env-derived `server`/`token` are never persisted; unknown keys are preserved.
+
 `connect.ts` deliberately backfills **only** the current project (not the whole machine) to
 avoid a consent surprise / upload spike; it tells the user to run `/claudelens:sync-history`
 separately for other projects with history.
