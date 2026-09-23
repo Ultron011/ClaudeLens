@@ -460,7 +460,7 @@ function TurnView({
   current: boolean;
   onCopyLink: (i: number) => void;
 }) {
-  const [showThinking, setShowThinking] = useState(false);
+  const [showThinking, setShowThinking] = useSyncedOpen(expandAll, revealV);
   const isUser = turn.role === 'user';
   const skill = isUser ? SKILL_BODY.exec(turn.text)?.[1] : undefined;
   // Icon, not a name: the speaker alternates side and colour, so a repeated name on every turn is
@@ -517,13 +517,28 @@ function TurnView({
         {turn.toolCalls.length > 0 && (
           <div className="tool-calls">
             {turn.toolCalls.map((tc, i) => (
-              <ToolCallRow key={i} tc={tc} />
+              <ToolCallRow key={i} tc={tc} expandAll={expandAll} revealV={revealV} />
             ))}
           </div>
         )}
       </div>
     </article>
   );
+}
+
+type ExpandAll = { open: boolean; v: number };
+
+/** Open state for any collapsible piece of a turn (text, thinking, tool call, question): starts
+ *  and re-syncs with the page's Expand/Collapse-all broadcast, and is forced open when the page
+ *  reveals this turn (permalink, find, prompt stepper). One hook so every "message" on the page
+ *  behaves the same way. */
+function useSyncedOpen(expandAll: ExpandAll, revealV = 0) {
+  const [open, setOpen] = useState(expandAll.open);
+  useEffect(() => setOpen(expandAll.open), [expandAll.v]);
+  useEffect(() => {
+    if (revealV) setOpen(true);
+  }, [revealV]);
+  return [open, setOpen] as const;
 }
 
 /** A message is long when it wouldn't fit on its one-line preview anyway. */
@@ -544,11 +559,7 @@ function CollapsibleText({
   /** Replaces the first-line preview (e.g. injected skill bodies). */
   preview?: string;
 }) {
-  const [open, setOpen] = useState(expandAll.open);
-  useEffect(() => setOpen(expandAll.open), [expandAll.v]);
-  useEffect(() => {
-    if (revealV) setOpen(true);
-  }, [revealV]);
+  const [open, setOpen] = useSyncedOpen(expandAll, revealV);
   if (!isLong(text) && !preview) return <TurnText text={text} />;
 
   if (!open) {
@@ -622,38 +633,58 @@ function TurnText({ text }: { text: string }) {
   );
 }
 
-function ToolCallRow({ tc }: { tc: ToolCall }) {
-  const [expanded, setExpanded] = useState(false);
-
-  const row = (
-    <div className={`tool-call${tc.error ? ' failed' : ''}${tc.denied ? ' denied' : ''}`}>
+/** One tool call as an accordion row, like a message: collapsed it shows the tool, its target
+ *  and the first line of its input; opening it shows the whole input with its line breaks. Rows
+ *  whose input already fits on one line render flat, with no toggle. */
+function ToolCallRow({ tc, expandAll, revealV }: { tc: ToolCall; expandAll: ExpandAll; revealV: number }) {
+  const [open, setOpen] = useSyncedOpen(expandAll, revealV);
+  const args = tc.args ?? '';
+  const firstLine = args.split('\n', 1)[0];
+  const expandable = args.includes('\n') || args.length > 90;
+  const status = (tc.error || tc.denied) && (
+    <span className="tc-status" title={tc.denied ? `Blocked before running (${tc.denied})` : 'The tool returned an error'}>
+      {tc.denied ? `denied · ${tc.denied}` : 'failed'}
+    </span>
+  );
+  const cls = `tool-call${tc.error ? ' failed' : ''}${tc.denied ? ' denied' : ''}${open && expandable ? ' open' : ''}`;
+  const inner = (
+    <>
+      <span className="tc-chevron" aria-hidden>
+        {expandable && <Icon name={open ? 'chevronDown' : 'chevronRight'} size={10} />}
+      </span>
       <span className="tc-name">{tc.name}</span>
       {tc.detail && <span className="tc-detail">{tc.detail}</span>}
-      {tc.args && (
-        <button
-          type="button"
-          className={`tc-args${expanded ? ' expanded' : ''}`}
-          title={tc.args}
-          aria-expanded={expanded}
-          aria-label={expanded ? 'Collapse command' : 'Expand command'}
-          onClick={() => setExpanded((v) => !v)}
-        >
-          {tc.args}
-        </button>
-      )}
-      {(tc.error || tc.denied) && (
-        <span className="tc-status" title={tc.denied ? `Blocked before running (${tc.denied})` : 'The tool returned an error'}>
-          {tc.denied ? `denied · ${tc.denied}` : 'failed'}
+      {args && (
+        <span className="tc-args" title={expandable ? undefined : args}>
+          {firstLine}
+          {expandable && !open && args.length > firstLine.length ? ' …' : ''}
         </span>
       )}
+      {status}
+    </>
+  );
+
+  const row = expandable ? (
+    <div className={cls}>
+      <button type="button" className="tc-head" aria-expanded={open} onClick={() => setOpen((v) => !v)}>
+        {inner}
+      </button>
+      {open && <pre className="tc-full">{args}</pre>}
+    </div>
+  ) : (
+    <div className={cls}>
+      <div className="tc-head">{inner}</div>
     </div>
   );
+
   if (!tc.questions && !tc.declined) return row;
   return (
     <div className="ask-block">
       {row}
       {tc.declined && <div className="ask-declined">User dismissed the question</div>}
-      {tc.questions?.map((q, i) => <AskedQuestionRow key={i} q={q} />)}
+      {tc.questions?.map((q, i) => (
+        <AskedQuestionRow key={i} q={q} expandAll={expandAll} revealV={revealV} />
+      ))}
     </div>
   );
 }
@@ -675,8 +706,8 @@ function splitAnswer(q: AskedQuestion): { picked: Set<string>; custom?: string }
 
 /** One AskUserQuestion question: a one-line "header → answer" summary that opens to the full
  *  question, every offered option (picked ones marked), and the user's note. */
-function AskedQuestionRow({ q }: { q: AskedQuestion }) {
-  const [open, setOpen] = useState(false);
+function AskedQuestionRow({ q, expandAll, revealV }: { q: AskedQuestion; expandAll: ExpandAll; revealV: number }) {
+  const [open, setOpen] = useSyncedOpen(expandAll, revealV);
   const { picked, custom } = splitAnswer(q);
   return (
     <div className={`ask-q${open ? ' open' : ''}`}>

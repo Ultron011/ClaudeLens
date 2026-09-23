@@ -19,9 +19,12 @@ import { redactText } from './redact.js';
 
 /** Backfill ledger key: bump this when the parser's output shape changes so old sessions
  *  auto-re-sync instead of being skipped forever. */
-export const PARSER_VERSION = 7;
+export const PARSER_VERSION = 8;
 
-const ARG_CAP = 300;
+/** Tool input kept per call. Large enough for real multi-line commands (heredocs, scripts) — the
+ *  dashboard shows the first line and expands to the rest — while file bodies stay excluded by
+ *  NEVER below. Was 300 with whitespace flattened, which made "expand" show a truncated blob. */
+const ARG_CAP = 4000;
 
 /** The one-or-two input fields that identify an invocation. `[]` = explicit opt-out.
  *  Unlisted tools fall through to the generic first-string rule. */
@@ -70,19 +73,28 @@ export function summarizeToolArgs(
       parts.push(String(v));
     }
   } else {
-    // Unknown / MCP tool: keep the key, since nothing else tells you what the value means.
+    // Unknown / MCP tool: every scalar field as `key=value`, one per line — nothing else tells
+    // you what a value means. The first one is what the collapsed row shows.
     for (const [k, v] of Object.entries(input)) {
       if (NEVER.test(k)) continue;
-      if (typeof v !== 'string') continue;
+      if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') continue;
       parts.push(`${k}=${v}`);
-      break;
     }
   }
   if (!parts.length) return undefined;
-  let joined = parts.join(' ').replace(/\s+/g, ' ').trim();
+  // Known tools join their 1-2 fields on one line ("pattern path"); MCP fields get a line each.
+  // Line breaks inside a value are kept — a heredoc should expand as the script it is.
+  let joined = parts
+    .join(fields ? ' ' : '\n')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+$/gm, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
   if (!joined) return undefined;
+  // Redact BEFORE truncating: a cut through the middle of a secret could dodge its pattern.
+  joined = redactText(joined).text;
   if (joined.length > ARG_CAP) joined = joined.slice(0, ARG_CAP - 1) + '…';
-  return redactText(joined).text;
+  return joined;
 }
 
 function asBlocks(content: string | ContentBlock[] | undefined): ContentBlock[] {

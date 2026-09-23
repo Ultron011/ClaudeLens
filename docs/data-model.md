@@ -20,8 +20,11 @@ the shape reference plus the invariants and legacy contract an agent must not vi
     checking those three consumers.
   - `args` — purely additive, added alongside `detail` without changing it
     (`shared/src/parser.ts`: `toolCalls.push({ name, detail, args: summarizeToolArgs(...) })`).
-    One-line, ≤300 char, **always-redacted** (unconditionally, not gated on the user's
-    `cfg.redact` setting — command lines are the highest-density secret location).
+    ≤4000 chars with the input's own line breaks kept (v8; was one-line ≤300 before), redacted
+    *before* truncation, **always** (unconditionally, not gated on the user's `cfg.redact`
+    setting — command lines are the highest-density secret location). Known tools emit their
+    1–2 fields on one line; unknown/MCP tools emit every scalar non-NEVER field as `key=value`,
+    one per line. The dashboard shows the first line and expands to the rest.
     `NEVER` regex in `parser.ts` permanently excludes file-body-shaped fields
     (`content`, `new_string`, `old_string`, `patch`, `diff`, `prompt`, `text`, `todos`, ...)
     from ever appearing in `args`, even under the generic fallback rule.
@@ -131,7 +134,7 @@ dropped by the tombstone check, forever, with no UI to lift one. The manual esca
 - `sum(daily[*].userMessages) === stats.userMessages`
 - `sum(modelUsage[*].costUsd) ≈ stats.estimatedCostUsd` (within 0.001 — `estimatedCostUsd` is
   a blended scalar computed independently, not derived by summing `modelUsage`)
-- `ToolCall.args` never contains a value from a `NEVER`-listed field, is ≤300 chars, and is
+- `ToolCall.args` never contains a value from a `NEVER`-listed field, is ≤4000 chars, and is
   always redacted (unconditional, unlike turn text redaction which is gated on `cfg.redact`)
 - `stats.turns > stats.userMessages` on any real multi-tool-call session
 - `ToolCall.detail` semantics are frozen (see above) — `args` is the only extension point
@@ -157,7 +160,7 @@ clock — `durationMs` (session-level) stays the honest upper bound.
 
 ## Versioning / legacy contract
 
-`PARSER_VERSION` (`shared/src/parser.ts`, currently **7**) is stamped on every
+`PARSER_VERSION` (`shared/src/parser.ts`, currently **8** — v8: full multi-line tool args) is stamped on every
 `ParsedSession.parserVersion` and stored per-row as `sessions.parser_version` (upsert takes
 `GREATEST(EXCLUDED.parser_version, sessions.parser_version)`, so a stale re-POST never
 regresses the stored version). It exists so a future shape-changing parser bump can make old

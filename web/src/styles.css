@@ -1056,28 +1056,39 @@ code { font-family: var(--mono); font-size: 0.86em; }
 
 .tool-calls { display: flex; flex-direction: column; gap: var(--s1); margin-top: var(--s3); }
 .tool-call {
-  display: grid; grid-template-columns: auto auto minmax(0, 1fr) auto; align-items: center; gap: var(--s2);
   background: var(--bg-elev); border: 1px solid var(--border-soft); border-radius: var(--r-sm);
-  padding: 5px 10px; font-family: var(--mono); font-size: var(--fs-xs);
+  font-family: var(--mono); font-size: var(--fs-xs);
 }
+/* The one-line summary row: chevron · tool · target · first line of input · status. A <button>
+ * when the input has more to show, a plain <div> otherwise (same grid either way). */
+.tc-head {
+  display: grid; grid-template-columns: 10px auto auto minmax(0, 1fr) auto; align-items: center;
+  gap: var(--s2); width: 100%; padding: 5px 10px; box-sizing: border-box;
+  background: none; border: none; margin: 0; font: inherit; color: inherit; text-align: left;
+}
+button.tc-head { cursor: pointer; border-radius: inherit; }
+button.tc-head:hover .tc-args { color: var(--text); }
+button.tc-head:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 /* Explicit grid-column per cell: .tc-detail is only rendered when present, and grid
- * auto-placement would otherwise slide .tc-args into column 2 (a bare `auto` track) instead of
- * column 3 whenever it's missing, defeating the truncation width below. */
-.tc-name { grid-column: 1; color: var(--accent); }
-.tc-detail { grid-column: 2; color: var(--text-dim); }
+ * auto-placement would otherwise slide .tc-args into the detail track instead of the 1fr one
+ * whenever it's missing, defeating the truncation width below. */
+.tc-chevron { grid-column: 1; display: inline-flex; color: var(--text-faint); }
+.tc-name { grid-column: 2; color: var(--accent); }
+.tc-detail { grid-column: 3; color: var(--text-dim); }
 .tc-args {
-  grid-column: 3;
+  grid-column: 4;
   /* minmax(0, 1fr) alone isn't enough: a grid item's automatic min-width is its content's
-   * min-content size, which for a 300-char command string can still be wide. min-width: 0
-   * overrides that floor so the column — and this button's ellipsis/pre-wrap — actually shrinks.
-   * Do not simplify this to a plain `1fr` or drop the min-width: 0, both are load-bearing. */
+   * min-content size, which for a long command can still be wide. min-width: 0 overrides that
+   * floor so the column — and this cell's ellipsis — actually shrinks. Both are load-bearing. */
   min-width: 0;
-  all: unset;
-  font-family: var(--mono); font-size: var(--fs-xs); color: var(--text-dim);
-  cursor: pointer; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.tc-args:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
-.tc-args.expanded { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
+/* Expanded body: the full input with its own line breaks. */
+.tc-full {
+  margin: 0; padding: 6px 10px 8px 28px; border-top: 1px dashed var(--border-soft);
+  font-family: var(--mono); font-size: var(--fs-xs); line-height: 1.55; color: var(--text);
+  white-space: pre-wrap; overflow-wrap: anywhere; max-height: 480px; overflow-y: auto;
+}
 
 /* Message accordion. Collapsed, a long message is its first line, ellipsized, as a button — the
  * bubble keeps its width so the conversation's shape still reads. */
@@ -1142,7 +1153,7 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .tool-call.failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-soft)); }
 .tool-call.denied { border-style: dashed; }
 .tc-status {
-  grid-column: 4; font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em;
+  grid-column: 5; font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em;
   padding: 1px 6px; border-radius: var(--r-xs); white-space: nowrap;
   color: var(--danger); background: var(--danger-soft);
 }

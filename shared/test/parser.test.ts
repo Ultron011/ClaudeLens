@@ -99,9 +99,25 @@ test('summarizeToolArgs never leaks a NEVER field', () => {
   assert.ok(args && !args.includes('SECRET'));
 });
 
-test('summarizeToolArgs caps at 300 chars', () => {
-  const args = summarizeToolArgs('Bash', { command: 'x'.repeat(1000) });
-  assert.ok(args && args.length <= 300);
+test('summarizeToolArgs caps at 4000 chars', () => {
+  const args = summarizeToolArgs('Bash', { command: 'x'.repeat(10000) });
+  assert.ok(args && args.length <= 4000);
+});
+
+test('summarizeToolArgs keeps line breaks in multi-line commands', () => {
+  const args = summarizeToolArgs('Bash', { command: 'cat <<EOF > f\r\nline one   \nline two\n\n\n\nEOF' });
+  assert.equal(args, 'cat <<EOF > f\nline one\nline two\n\nEOF');
+});
+
+test('summarizeToolArgs lists every scalar MCP field, never a NEVER one', () => {
+  const args = summarizeToolArgs('mcp__x__query', { sql: 'select 1', limit: 5, content: 'BODY', nested: { a: 1 } });
+  assert.equal(args, 'sql=select 1\nlimit=5');
+});
+
+test('summarizeToolArgs redacts a secret that straddles the cap', () => {
+  const key = 'AKIA' + 'ABCDEFGHIJKLMNOP';
+  const args = summarizeToolArgs('Bash', { command: 'x'.repeat(3990) + ' ' + key });
+  assert.ok(args && !args.includes('AKIA'));
 });
 
 test('summarizeToolArgs redacts a secret in a Bash command', () => {

@@ -145,16 +145,16 @@ function summarizeToolArgs(name, input) {
   } else {
     for (const [k, v] of Object.entries(input)) {
       if (NEVER.test(k)) continue;
-      if (typeof v !== "string") continue;
+      if (typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean") continue;
       parts.push(`${k}=${v}`);
-      break;
     }
   }
   if (!parts.length) return void 0;
-  let joined = parts.join(" ").replace(/\s+/g, " ").trim();
+  let joined = parts.join(fields ? " " : "\n").replace(/\r\n?/g, "\n").replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n").trim();
   if (!joined) return void 0;
+  joined = redactText(joined).text;
   if (joined.length > ARG_CAP) joined = joined.slice(0, ARG_CAP - 1) + "\u2026";
-  return redactText(joined).text;
+  return joined;
 }
 function asBlocks(content) {
   if (!content) return [];
@@ -552,8 +552,8 @@ var init_parser = __esm({
     "use strict";
     init_pricing();
     init_redact();
-    PARSER_VERSION = 7;
-    ARG_CAP = 300;
+    PARSER_VERSION = 8;
+    ARG_CAP = 4e3;
     ARG_FIELDS = {
       Bash: ["command"],
       BashOutput: ["bash_id"],
