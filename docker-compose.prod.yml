@@ -2,12 +2,19 @@
 #   1. cp .env.example .env  and set CLAUDELENS_TOKEN (+ a real POSTGRES_PASSWORD)
 #   2. docker compose -f docker-compose.prod.yml up -d --build
 #   3. point teammates' `/claudelens:setup` at http://<this-host>:<CLAUDELENS_PORT>
+# Bounded json-file logs: unrotated container logs otherwise grow forever on a shared disk.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 services:
   db:
     image: postgres:16-alpine
     environment:
       POSTGRES_USER: claudelens
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claudelens}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
       POSTGRES_DB: claudelens
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -17,21 +24,32 @@ services:
       timeout: 3s
       retries: 10
     restart: unless-stopped
+    logging: *logging
 
   app:
     build: .
+    # tini as PID 1: forwards SIGTERM to node so in-flight ingests drain on deploy.
+    init: true
     depends_on:
       db:
         condition: service_healthy
     environment:
       PORT: 4000
-      DATABASE_URL: postgres://claudelens:${POSTGRES_PASSWORD:-claudelens}@db:5432/claudelens
+      DATABASE_URL: postgres://claudelens:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/claudelens
       # Required in production: gates ingest so only teammates with the token
       # can publish. Teammates put the same value in ~/.claude/claudelens.json.
       CLAUDELENS_TOKEN: ${CLAUDELENS_TOKEN:?set CLAUDELENS_TOKEN in .env before deploying}
     ports:
       - "127.0.0.1:${CLAUDELENS_PORT:-4000}:4000"
+    # /api/health pings the DB, so this goes unhealthy when the pool can't reach Postgres.
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4000/api/health').then(r=>process.exit(r.ok?0:1),()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     restart: unless-stopped
+    logging: *logging
 
 volumes:
   pgdata:

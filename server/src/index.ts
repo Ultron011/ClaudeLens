@@ -1,17 +1,116 @@
-import express from 'express';
-import cors from 'cors';
+import express, { type RequestHandler } from 'express';
 import 'dotenv/config';
-import { existsSync } from 'node:fs';
+import { createHash, timingSafeEqual } from 'node:crypto';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { pool, SCHEMA, MIGRATIONS } from './db.js';
-import type { IngestPayload } from '@claudelens/shared';
+import { redactDeep, redactText, type IngestPayload } from '@claudelens/shared';
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: '25mb' }));
+app.disable('x-powered-by');
+// Behind nginx: trust one hop so req.ip is the client, not 127.0.0.1.
+app.set('trust proxy', 1);
+// No CORS middleware: the dashboard is served from this same origin, and the CLI isn't a browser.
 
 const INGEST_TOKEN = process.env.CLAUDELENS_TOKEN ?? '';
+
+// Web build directory, served below. Read here too so the CSP can hash its inline theme script.
+const WEB_DIST = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
+
+/** CSP hashes for index.html's inline <script>s (the pre-paint theme resolver). Hashing beats
+ *  'unsafe-inline': an injected script in transcript-derived content still can't run. */
+function inlineScriptHashes(): string[] {
+  const html = join(WEB_DIST, 'index.html');
+  if (!existsSync(html)) return [];
+  const out: string[] = [];
+  for (const m of readFileSync(html, 'utf8').matchAll(/<script>([\s\S]*?)<\/script>/g)) {
+    out.push(`'sha256-${createHash('sha256').update(m[1]).digest('base64')}'`);
+  }
+  return out;
+}
+const CSP = [
+  "default-src 'self'",
+  `script-src 'self' ${inlineScriptHashes().join(' ')}`.trim(),
+  // React `style={{…}}` props compile to inline style attributes.
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+  "object-src 'none'",
+].join('; ');
+
+app.use((req, res, next) => {
+  res.setHeader('Content-Security-Policy', CSP);
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'same-origin');
+  res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+  // One access line per API call; static assets and health probes would drown it.
+  if (req.path.startsWith('/api/') && req.path !== '/api/health') {
+    const t0 = Date.now();
+    res.on('finish', () =>
+      console.log(
+        `${new Date().toISOString()} ${req.method} ${req.originalUrl.slice(0, 200)} ${res.statusCode} ${Date.now() - t0}ms ${req.ip}`,
+      ),
+    );
+  }
+  next();
+});
+
+// Constant-time compare so the ingest token can't be recovered by timing.
+function tokenOk(header: string | undefined): boolean {
+  const want = Buffer.from(`Bearer ${INGEST_TOKEN}`);
+  const got = Buffer.from(header ?? '');
+  return got.length === want.length && timingSafeEqual(got, want);
+}
+
+/** Token gate that runs BEFORE the 25 MB body parse, so an anonymous client can't make the
+ *  server buffer and parse a huge body. */
+const requireIngestToken: RequestHandler = (req, res, next) => {
+  if (INGEST_TOKEN && !tokenOk(req.header('authorization'))) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+};
+
+// Everything except ingest gets a small body limit.
+const smallJson = express.json({ limit: '100kb' });
+const ingestJson = express.json({ limit: '25mb' });
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+class BadRequest extends Error {}
+
+/** Query params as plain strings. `?a=1&a=2` / `?a[]=1` arrive as arrays or objects — reject them
+ *  rather than letting a non-string reach SQL and surface as a 500. */
+function queryStrings(q: Record<string, unknown>): Record<string, string | undefined> {
+  const out: Record<string, string | undefined> = {};
+  for (const [k, v] of Object.entries(q)) {
+    if (v === undefined) continue;
+    if (typeof v !== 'string') throw new BadRequest(`query param "${k}" must be a single value`);
+    out[k] = v;
+  }
+  return out;
+}
+
+/** An ISO-ish date for from/to; Postgres would otherwise throw on garbage and we'd 500. */
+function dateParam(name: string, v: string | undefined): string | undefined {
+  if (!v) return undefined;
+  if (Number.isNaN(Date.parse(v))) throw new BadRequest(`"${name}" must be an ISO date`);
+  return v;
+}
+
+function sendError(res: express.Response, label: string, err: unknown) {
+  if (err instanceof BadRequest) return res.status(400).json({ error: err.message });
+  console.error(`${label} error:`, err);
+  res.status(500).json({ error: `${label} failed` });
+}
+
+/** The dashboard's "(no project)" group is a route-boundary sentinel for project IS NULL. */
+const NO_PROJECT = '(no project)';
 
 // --- helpers ---------------------------------------------------------------
 
@@ -68,19 +167,55 @@ const USER_MESSAGES_EXPR =
 
 // --- routes ----------------------------------------------------------------
 
-app.get('/api/health', (_req, res) => res.json({ ok: true }));
+/** The author a session should be stored under. An explicit alias (author_aliases) wins; a name
+ *  never seen before that matches an existing author case-insensitively joins that author, so a
+ *  reconnect as "SAURABH" doesn't split one person into two rows on the dashboard. */
+async function canonicalAuthor(author: string): Promise<string> {
+  const alias = await pool.query('SELECT canonical FROM author_aliases WHERE alias = $1', [author]);
+  if (alias.rows.length) return alias.rows[0].canonical;
+  const known = await pool.query(
+    `SELECT author, (author = $1) AS exact FROM sessions WHERE lower(author) = lower($1)
+      GROUP BY author ORDER BY exact DESC, count(*) DESC LIMIT 1`,
+    [author],
+  );
+  return known.rows[0]?.author ?? author;
+}
+
+// Deep health: a wedged pool or a lost DB must fail the probe, not report green.
+app.get('/api/health', async (_req, res) => {
+  try {
+    await pool.query('SELECT 1');
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('health error:', err);
+    res.status(503).json({ ok: false, error: 'database unavailable' });
+  }
+});
 
 // Opt-in ingest from the CLI.
-app.post('/api/sessions', async (req, res) => {
-  if (INGEST_TOKEN) {
-    const auth = req.header('authorization') ?? '';
-    if (auth !== `Bearer ${INGEST_TOKEN}`) return res.status(401).json({ error: 'unauthorized' });
-  }
+app.post('/api/sessions', requireIngestToken, ingestJson, async (req, res) => {
   const body = req.body as IngestPayload;
-  if (!body?.session?.sessionId || !body.author) {
-    return res.status(400).json({ error: 'session and author are required' });
+  if (
+    !body?.session?.sessionId ||
+    typeof body.session.sessionId !== 'string' ||
+    !body.author ||
+    typeof body.author !== 'string' ||
+    typeof body.session.stats !== 'object' ||
+    !Array.isArray(body.session.turns)
+  ) {
+    return res.status(400).json({ error: 'session (with stats and turns) and author are required' });
   }
   const s = body.session;
+  try {
+    body.author = await canonicalAuthor(body.author);
+  } catch (err) {
+    return sendError(res, 'ingest', err);
+  }
+  // Server-side redaction backstop: clients may run with redaction off (or an old plugin), and the
+  // dashboard is readable by the whole team, so secrets are scrubbed here regardless.
+  s.turns = redactDeep(s.turns).value;
+  s.title = redactText(String(s.title ?? '')).text;
+  if (s.stats.firstUserPrompt) s.stats.firstUserPrompt = redactText(s.stats.firstUserPrompt).text;
   try {
     // Tombstone gate: a prior delete of this session or its project must stick. The Stop hook is
     // fire-and-forget, so this is always a 200 — a 4xx would just be swallowed.
@@ -119,6 +254,10 @@ app.post('/api/sessions', async (req, res) => {
          permission_modes=EXCLUDED.permission_modes,
          parser_version=GREATEST(EXCLUDED.parser_version, sessions.parser_version),
          updated_at=now()
+       -- Never let an older parser or an out-of-order (delayed) upload overwrite newer data.
+       WHERE EXCLUDED.parser_version >= sessions.parser_version
+         AND (sessions.ended_at IS NULL OR EXCLUDED.ended_at IS NULL
+              OR EXCLUDED.ended_at >= sessions.ended_at)
        RETURNING id`,
       [
         s.sessionId,
@@ -142,49 +281,35 @@ app.post('/api/sessions', async (req, res) => {
         s.cwd ?? null,
       ],
     );
-    res.json({ id: rows[0].id, url: `/session/${rows[0].id}` });
+    if (rows.length) return res.json({ id: rows[0].id, url: `/session/${rows[0].id}` });
+    // The WHERE guard skipped a stale update. Still a success for the client — the row exists.
+    const existing = await pool.query('SELECT id FROM sessions WHERE session_id = $1 AND author = $2', [
+      s.sessionId,
+      body.author,
+    ]);
+    const id = existing.rows[0]?.id;
+    res.json({ id, url: id ? `/session/${id}` : undefined, stale: true });
   } catch (err) {
-    console.error('ingest error:', err);
-    res.status(500).json({ error: 'ingest failed' });
+    sendError(res, 'ingest', err);
   }
 });
 
 // List / filter / search (no transcript body).
 app.get('/api/sessions', async (req, res) => {
-  const { author, project, tag, featured, q, sort, includeHidden, identity, autoMode, from, to } =
-    req.query as Record<string, string>;
-  const where: string[] = [];
+  let where: string[] = [];
+  let orderBy: string;
   const args: unknown[] = [];
-  const add = (clause: string, val: unknown) => {
-    args.push(val);
-    where.push(clause.replace('?', `$${args.length}`));
-  };
-  if (includeHidden !== 'true') where.push('hidden = false');
-  if (author) add('author = ?', author);
-  if (project) add('project = ?', project);
-  if (tag) add('? = ANY(tags)', tag);
-  if (featured === 'true') where.push('featured = true');
-  if (identity) {
-    args.push(identity);
-    where.push(IDENTITY_CLAUSE(args.length));
+  try {
+    const qs = queryStrings(req.query);
+    const { author, project, tag, featured, q, sort, includeHidden, identity, autoMode, inTranscript } = qs;
+    const from = dateParam('from', qs.from);
+    const to = dateParam('to', qs.to);
+    ({ where, orderBy } = buildListFilter(args, {
+      author, project, tag, featured, q, sort, includeHidden, identity, autoMode, from, to, inTranscript,
+    }));
+  } catch (err) {
+    return sendError(res, 'list', err);
   }
-  if (autoMode === 'true') where.push('used_auto_mode = true');
-  if (from) add('started_at >= ?', from);
-  if (to) add('started_at < ?', to);
-  if (q) {
-    args.push(`%${q}%`);
-    const p = `$${args.length}`;
-    where.push(`(title ILIKE ${p} OR note ILIKE ${p} OR author ILIKE ${p})`);
-  }
-
-  const orderBy =
-    sort === 'cost'
-      ? `(stats->>'estimatedCostUsd')::float DESC NULLS LAST`
-      : sort === 'turns'
-        ? `(stats->>'turns')::int DESC NULLS LAST`
-        : sort === 'messages'
-          ? `${USER_MESSAGES_EXPR} DESC NULLS LAST`
-          : 'featured DESC, created_at DESC';
 
   const limit = Math.min(Math.max(Number(req.query.limit) || 100, 1), 500);
   const offset = Math.max(Number(req.query.offset) || 0, 0);
@@ -201,23 +326,101 @@ app.get('/api/sessions', async (req, res) => {
     const { rows } = await pool.query(sql, args);
     res.json(rows.map(summaryRow));
   } catch (err) {
-    console.error('list error:', err);
-    res.status(500).json({ error: 'list failed' });
+    sendError(res, 'list', err);
   }
 });
 
+function buildListFilter(
+  args: unknown[],
+  f: Record<string, string | undefined>,
+): { where: string[]; orderBy: string } {
+  const { author, project, tag, featured, q, sort, includeHidden, identity, autoMode, from, to, inTranscript } = f;
+  const where: string[] = [];
+  const add = (clause: string, val: unknown) => {
+    args.push(val);
+    where.push(clause.replace('?', `$${args.length}`));
+  };
+  if (includeHidden !== 'true') where.push('hidden = false');
+  if (author) add('author = ?', author);
+  if (project === NO_PROJECT) where.push('project IS NULL');
+  else if (project) add('project = ?', project);
+  if (tag) add('? = ANY(tags)', tag);
+  if (featured === 'true') where.push('featured = true');
+  if (identity) {
+    args.push(identity);
+    where.push(IDENTITY_CLAUSE(args.length));
+  }
+  if (autoMode === 'true') where.push('used_auto_mode = true');
+  if (from) add('started_at >= ?', from);
+  if (to) add('started_at < ?', to);
+  if (q) {
+    args.push(`%${q}%`);
+    const p = `$${args.length}`;
+    const fields = `title ILIKE ${p} OR note ILIKE ${p} OR author ILIKE ${p} OR project ILIKE ${p}`;
+    if (inTranscript === 'true') {
+      // Word match via the search_tsv GIN index (see db.ts), not substring — ILIKE over the
+      // transcript itself would de-TOAST every row.
+      args.push(q);
+      where.push(`(${fields} OR search_tsv @@ websearch_to_tsquery('simple', $${args.length}))`);
+    } else {
+      where.push(`(${fields})`);
+    }
+  }
+
+  return { where, orderBy: orderFor(sort) };
+}
+
+/** ORDER BY for a `sort` param: cost|turns|messages|tokens|recent|featured, `_asc` suffix flips.
+ *  Only these literals are ever interpolated — the param itself never reaches SQL. */
+function orderFor(sort: string | undefined): string {
+  const DIR = (d: string) => (sort?.endsWith('_asc') ? d.replace('DESC', 'ASC') : d);
+  const key = sort?.replace(/_asc$/, '');
+  return (
+    key === 'cost'
+      ? DIR(`(stats->>'estimatedCostUsd')::float DESC NULLS LAST`)
+      : key === 'turns'
+        ? DIR(`(stats->>'turns')::int DESC NULLS LAST`)
+        : key === 'messages'
+          ? DIR(`${USER_MESSAGES_EXPR} DESC NULLS LAST`)
+          : key === 'tokens'
+            ? DIR(`(stats->>'totalTokens')::bigint DESC NULLS LAST`)
+            : key === 'featured'
+              ? 'featured DESC, started_at DESC NULLS LAST, created_at DESC'
+              : DIR('started_at DESC NULLS LAST') + ', created_at DESC');
+}
+
 // One-endpoint analytics: three queries over one filtered scope, run concurrently so the daily/
 // models/totals panels can never disagree. identity omitted = org-wide.
-app.get('/api/analytics', async (req, res) => {
-  const { identity, from, to } = req.query as Record<string, string>;
-  const args: unknown[] = [identity ?? null, from ?? null, to ?? null];
-  // $1 is referenced unconditionally (and cast, so Postgres can type it) even org-wide: a query
-  // text that never mentions $1 while still binding it fails with "could not determine data type".
-  const sessionLimit = Math.min(Math.max(Number(req.query.sessionLimit) || 10, 1), 100);
-  const sessionOffset = Math.max(Number(req.query.sessionOffset) || 0, 0);
+/** Shared scope for the analytics endpoints: $1 identity, $2 from, $3 to, $4 project.
+ *  Every param is referenced unconditionally (and cast, so Postgres can type it) even when null:
+ *  a query text that never mentions a bound $n fails with "could not determine data type". */
+function analyticsScope(req: express.Request): { args: unknown[]; scopeWhere: string } {
+  const qs = queryStrings(req.query);
+  const project = qs.project;
+  const args: unknown[] = [
+    qs.identity ?? null,
+    dateParam('from', qs.from) ?? null,
+    dateParam('to', qs.to) ?? null,
+    project ?? null,
+  ];
   const scopeWhere =
     `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
-    ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
+    ` AND (started_at >= $2::timestamptz OR $2::timestamptz IS NULL)` +
+    ` AND (started_at < $3::timestamptz OR $3::timestamptz IS NULL)` +
+    ` AND ($4::text IS NULL OR project = $4 OR ($4 = '${NO_PROJECT}' AND project IS NULL))`;
+  return { args, scopeWhere };
+}
+
+app.get('/api/analytics', async (req, res) => {
+  let args: unknown[], scopeWhere: string;
+  try {
+    ({ args, scopeWhere } = analyticsScope(req));
+  } catch (err) {
+    return sendError(res, 'analytics', err);
+  }
+  const sessionLimit = Math.min(Math.max(Number(req.query.sessionLimit) || 10, 1), 100);
+  const sessionOffset = Math.max(Number(req.query.sessionOffset) || 0, 0);
+  const sessionOrder = orderFor(typeof req.query.sessionSort === 'string' ? req.query.sessionSort : undefined);
   try {
     const [totalsQ, dailyQ, modelsQ, sessionsQ] = await Promise.all([
       pool.query(
@@ -258,7 +461,7 @@ app.get('/api/analytics', async (req, res) => {
                 org_name, used_auto_mode, permission_modes, parser_version
            FROM sessions
           WHERE ${scopeWhere}
-          ORDER BY created_at DESC
+          ORDER BY ${sessionOrder}
           LIMIT ${sessionLimit + 1} OFFSET ${sessionOffset}`,
         args,
       ),
@@ -274,19 +477,19 @@ app.get('/api/analytics', async (req, res) => {
       sessionsHasMore: sessionsQ.rows.length > sessionLimit,
     });
   } catch (err) {
-    console.error('analytics error:', err);
-    res.status(500).json({ error: 'analytics failed' });
+    sendError(res, 'analytics', err);
   }
 });
 
 // Extended model analytics: per-model token breakdown, tools, permission modes, team matrix.
 // identity omitted = org-wide. Same from/to semantics as /api/analytics.
 app.get('/api/model-analytics', async (req, res) => {
-  const { identity, from, to } = req.query as Record<string, string>;
-  const args: unknown[] = [identity ?? null, from ?? null, to ?? null];
-  const scopeWhere =
-    `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
-    ` AND (started_at >= $2 OR $2 IS NULL) AND (started_at < $3 OR $3 IS NULL)`;
+  let args: unknown[], scopeWhere: string;
+  try {
+    ({ args, scopeWhere } = analyticsScope(req));
+  } catch (err) {
+    return sendError(res, 'model-analytics', err);
+  }
   try {
     const [modelsQ, toolsQ, modesQ, authorModelsQ, totalsQ] = await Promise.all([
       pool.query(
@@ -308,8 +511,11 @@ app.get('/api/model-analytics', async (req, res) => {
         args,
       ),
       pool.query(
+        // errors come from stats.toolErrors (parser v7+); older sessions contribute 0, so the rate
+        // is a floor until they re-sync.
         `WITH scope AS (SELECT stats FROM sessions WHERE ${scopeWhere})
-         SELECT key AS tool, sum(value::int)::int AS uses
+         SELECT key AS tool, sum(value::int)::int AS uses,
+                sum(coalesce((stats->'toolErrors'->>key)::int, 0))::int AS errors
            FROM scope, LATERAL jsonb_each_text(stats->'toolUsage')
           GROUP BY key ORDER BY uses DESC LIMIT 30`,
         args,
@@ -354,15 +560,15 @@ app.get('/api/model-analytics', async (req, res) => {
       authorModels: authorModelsQ.rows,
     });
   } catch (err) {
-    console.error('model-analytics error:', err);
-    res.status(500).json({ error: 'model-analytics failed' });
+    sendError(res, 'model-analytics', err);
   }
 });
 
 // Aggregate stats for the value / leaderboard panel.
 app.get('/api/stats', async (_req, res) => {
   try {
-    const authors = await pool.query(`
+    const [authors, skills, tools, totals] = await Promise.all([
+      pool.query(`
       SELECT author,
              author AS label,
              coalesce(
@@ -378,22 +584,23 @@ app.get('/api/stats', async (_req, res) => {
              sum((stats->>'turns')::int)::int AS turns,
              sum(${USER_MESSAGES_EXPR})::int AS "userMessages",
              sum((stats->>'totalTokens')::bigint)::bigint AS tokens
-      FROM sessions WHERE hidden = false GROUP BY author ORDER BY sessions DESC`);
-    const skills = await pool.query(`
+      FROM sessions WHERE hidden = false GROUP BY author ORDER BY sessions DESC`),
+      pool.query(`
       SELECT skill, count(*)::int AS uses FROM sessions,
         LATERAL jsonb_array_elements_text(stats->'skills') AS skill
       WHERE hidden = false
-      GROUP BY skill ORDER BY uses DESC LIMIT 25`);
-    const tools = await pool.query(`
+      GROUP BY skill ORDER BY uses DESC LIMIT 25`),
+      pool.query(`
       SELECT key AS tool, sum(value::int)::int AS uses FROM sessions,
         LATERAL jsonb_each_text(stats->'toolUsage')
       WHERE hidden = false
-      GROUP BY key ORDER BY uses DESC LIMIT 25`);
-    const totals = await pool.query(`
+      GROUP BY key ORDER BY uses DESC LIMIT 25`),
+      pool.query(`
       SELECT count(*)::int AS sessions,
              count(DISTINCT author)::int AS authors,
              round(sum((stats->>'estimatedCostUsd')::numeric), 2) AS cost
-      FROM sessions WHERE hidden = false`);
+      FROM sessions WHERE hidden = false`),
+    ]);
     res.json({
       totals: totals.rows[0],
       authors: authors.rows,
@@ -401,27 +608,33 @@ app.get('/api/stats', async (_req, res) => {
       tools: tools.rows,
     });
   } catch (err) {
-    console.error('stats error:', err);
-    res.status(500).json({ error: 'stats failed' });
+    sendError(res, 'stats', err);
   }
 });
 
 // Full session incl. transcript.
 app.get('/api/sessions/:id', async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'not found' });
   try {
-    const { rows } = await pool.query('SELECT * FROM sessions WHERE id = $1', [req.params.id]);
+    const { rows } = await pool.query(
+      `SELECT id, session_id, title, author, author_email, project, cwd, git_branch, note, tags, featured,
+              hidden, stats, transcript, started_at, ended_at, created_at, account_email,
+              account_display_name, org_name, used_auto_mode, permission_modes, parser_version
+         FROM sessions WHERE id = $1`,
+      [req.params.id],
+    );
     if (!rows.length) return res.status(404).json({ error: 'not found' });
     const r = rows[0];
     res.json({ ...summaryRow(r), authorEmail: r.author_email ?? undefined, turns: r.transcript });
   } catch (err) {
-    console.error('get error:', err);
-    res.status(500).json({ error: 'get failed' });
+    sendError(res, 'get', err);
   }
 });
 
 // Curation: toggle featured / edit tags.
-app.patch('/api/sessions/:id', async (req, res) => {
-  const { featured, hidden, tags } = req.body as {
+app.patch('/api/sessions/:id', smallJson, async (req, res) => {
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'not found' });
+  const { featured, hidden, tags } = (req.body ?? {}) as {
     featured?: boolean;
     hidden?: boolean;
     tags?: string[];
@@ -436,37 +649,46 @@ app.patch('/api/sessions/:id', async (req, res) => {
     args.push(hidden);
     sets.push(`hidden = $${args.length}`);
   }
-  if (Array.isArray(tags)) {
-    args.push(tags);
+  if (tags !== undefined) {
+    if (
+      !Array.isArray(tags) ||
+      tags.length > 20 ||
+      tags.some((t) => typeof t !== 'string' || !t.trim() || t.length > 50)
+    ) {
+      return res.status(400).json({ error: 'tags must be up to 20 non-empty strings of ≤50 chars' });
+    }
+    args.push(tags.map((t) => t.trim()));
     sets.push(`tags = $${args.length}`);
   }
   if (!sets.length) return res.status(400).json({ error: 'nothing to update' });
   args.push(req.params.id);
   try {
     const { rows } = await pool.query(
-      `UPDATE sessions SET ${sets.join(', ')} WHERE id = $${args.length} RETURNING *`,
+      // Explicit columns: RETURNING * would de-TOAST the whole transcript just to drop it.
+      `UPDATE sessions SET ${sets.join(', ')} WHERE id = $${args.length}
+       RETURNING id, session_id, title, author, project, cwd, git_branch, note, tags, featured, hidden,
+                 stats, started_at, ended_at, created_at, account_email, account_display_name,
+                 org_name, used_auto_mode, permission_modes, parser_version`,
       args,
     );
     if (!rows.length) return res.status(404).json({ error: 'not found' });
     res.json(summaryRow(rows[0]));
   } catch (err) {
-    console.error('patch error:', err);
-    res.status(500).json({ error: 'update failed' });
+    sendError(res, 'update', err);
   }
 });
 
 // Delete a single session. Writes a tombstone in the same transaction so the next Stop hook
 // can't resurrect the row.
 app.delete('/api/sessions/:id', async (req, res) => {
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  if (!UUID_RE.test(req.params.id)) return res.status(404).json({ error: 'not found' });
+  await inTransaction(res, 'delete', async (client) => {
     const found = await client.query('SELECT session_id, author FROM sessions WHERE id = $1', [
       req.params.id,
     ]);
     if (!found.rows.length) {
-      await client.query('ROLLBACK');
-      return res.status(404).json({ error: 'not found' });
+      res.status(404).json({ error: 'not found' });
+      return false;
     }
     const { session_id, author } = found.rows[0];
     await client.query(
@@ -477,30 +699,44 @@ app.delete('/api/sessions/:id', async (req, res) => {
     const { rowCount } = await client.query('DELETE FROM sessions WHERE id = $1', [
       req.params.id,
     ]);
-    await client.query('COMMIT');
     res.json({ deleted: rowCount });
-  } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('delete error:', err);
-    res.status(500).json({ error: 'delete failed' });
-  } finally {
-    client.release();
-  }
+    return true;
+  });
 });
+
+/** BEGIN → fn → COMMIT (fn returns true) or ROLLBACK. Every await is inside the try — a failed
+ *  pool.connect() or ROLLBACK on a dead connection must answer 500, not become an unhandled
+ *  rejection that kills the process. */
+async function inTransaction(
+  res: express.Response,
+  label: string,
+  fn: (client: import('pg').PoolClient) => Promise<boolean>,
+) {
+  let client: import('pg').PoolClient | undefined;
+  try {
+    client = await pool.connect();
+    await client.query('BEGIN');
+    await client.query((await fn(client)) ? 'COMMIT' : 'ROLLBACK');
+  } catch (err) {
+    await client?.query('ROLLBACK').catch(() => {});
+    if (!res.headersSent) sendError(res, label, err);
+    else console.error(`${label} error after response:`, err);
+  } finally {
+    client?.release();
+  }
+}
 
 // Delete every session for one author+project (a "project" on the dashboard). Same
 // same-transaction tombstone. The '(no project)' sentinel is a route-boundary concept only —
 // it must not leak into the deletions table as a literal string.
 app.delete('/api/projects', async (req, res) => {
-  const { author, project } = req.query as Record<string, string>;
-  if (!author || !project) {
+  const { author, project } = req.query;
+  if (typeof author !== 'string' || typeof project !== 'string' || !author || !project) {
     return res.status(400).json({ error: 'author and project are required' });
   }
-  const noProject = project === '(no project)';
+  const noProject = project === NO_PROJECT;
   const projectVal = noProject ? null : project;
-  const client = await pool.connect();
-  try {
-    await client.query('BEGIN');
+  await inTransaction(res, 'delete project', async (client) => {
     await client.query(
       `INSERT INTO deletions (scope, author, project, no_project) VALUES ('project', $1, $2, $3)
        ON CONFLICT DO NOTHING`,
@@ -512,23 +748,88 @@ app.delete('/api/projects', async (req, res) => {
         : 'DELETE FROM sessions WHERE author = $1 AND project = $2',
       noProject ? [author] : [author, projectVal],
     );
-    await client.query('COMMIT');
     res.json({ deleted: rowCount ?? 0 });
+    return true;
+  });
+});
+
+// One person's projects, aggregated server-side (the page used to fold ≤500 fetched rows, which
+// silently understated heavy users). Same author/from/to semantics as GET /api/sessions.
+app.get('/api/projects', async (req, res) => {
+  let args: unknown[];
+  try {
+    const qs = queryStrings(req.query);
+    if (!qs.author) throw new BadRequest('author is required');
+    args = [qs.author, dateParam('from', qs.from) ?? null, dateParam('to', qs.to) ?? null];
   } catch (err) {
-    await client.query('ROLLBACK');
-    console.error('delete project error:', err);
-    res.status(500).json({ error: 'delete failed' });
-  } finally {
-    client.release();
+    return sendError(res, 'projects', err);
+  }
+  const scope =
+    `hidden = false AND author = $1` +
+    ` AND (started_at >= $2::timestamptz OR $2::timestamptz IS NULL)` +
+    ` AND (started_at < $3::timestamptz OR $3::timestamptz IS NULL)`;
+  try {
+    const [projectsQ, totalsQ, skillsQ] = await Promise.all([
+      pool.query(
+        // Skills are aggregated in their own CTE: joining them row-per-skill into the sums
+        // would multiply every total by the session's skill count.
+        `WITH scope AS (SELECT coalesce(project, '${NO_PROJECT}') AS project, stats, started_at, created_at
+                          FROM sessions WHERE ${scope}),
+              agg AS (SELECT project,
+                             count(*)::int AS sessions,
+                             sum((stats->>'turns')::int)::int AS turns,
+                             sum(${USER_MESSAGES_EXPR})::int AS messages,
+                             sum((stats->>'totalTokens')::bigint)::bigint AS tokens,
+                             round(sum((stats->>'estimatedCostUsd')::numeric), 4) AS cost,
+                             max(coalesce(started_at, created_at)) AS "lastActivity"
+                        FROM scope GROUP BY project),
+              sk AS (SELECT project, array_agg(DISTINCT s) AS skills
+                       FROM scope, LATERAL jsonb_array_elements_text(coalesce(stats->'skills','[]'::jsonb)) s
+                      GROUP BY project)
+         SELECT agg.*, coalesce(sk.skills, '{}') AS skills
+           FROM agg LEFT JOIN sk USING (project)
+          ORDER BY sessions DESC, "lastActivity" DESC`,
+        args,
+      ),
+      pool.query(
+        `SELECT count(*)::int AS sessions,
+                count(DISTINCT coalesce(project, '${NO_PROJECT}'))::int AS projects,
+                coalesce(sum((stats->>'turns')::int), 0)::int AS turns,
+                coalesce(sum(${USER_MESSAGES_EXPR}), 0)::int AS messages,
+                coalesce(sum((stats->>'totalTokens')::bigint), 0)::bigint AS tokens,
+                coalesce(round(sum((stats->>'estimatedCostUsd')::numeric), 4), 0) AS cost
+           FROM sessions WHERE ${scope}`,
+        args,
+      ),
+      pool.query(
+        `SELECT sk AS skill, count(*)::int AS uses
+           FROM sessions, LATERAL jsonb_array_elements_text(coalesce(stats->'skills','[]'::jsonb)) sk
+          WHERE ${scope}
+          GROUP BY sk ORDER BY uses DESC LIMIT 25`,
+        args,
+      ),
+    ]);
+    res.json({ totals: totalsQ.rows[0], projects: projectsQ.rows, skills: skillsQ.rows });
+  } catch (err) {
+    sendError(res, 'projects', err);
   }
 });
+
+// Unknown /api/* → JSON 404 instead of falling through to the SPA's index.html.
+app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 
 // Serve the built dashboard from the same origin as the API (production).
 // The web app calls relative /api/* paths, so co-hosting means zero CORS/URL
 // config for viewers. Falls back to index.html for client-side routing.
-const WEB_DIST = join(dirname(fileURLToPath(import.meta.url)), '../../web/dist');
 if (existsSync(WEB_DIST)) {
-  app.use(express.static(WEB_DIST));
+  // Vite fingerprints /assets/*, so those can be cached forever; index.html must always revalidate.
+  app.use(
+    express.static(WEB_DIST, {
+      setHeaders: (res, path) => {
+        if (path.includes('/assets/')) res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+      },
+    }),
+  );
   app.use((req, res, next) => {
     if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
     res.sendFile(join(WEB_DIST, 'index.html'));
@@ -538,10 +839,30 @@ if (existsSync(WEB_DIST)) {
 
 const PORT = Number(process.env.PORT ?? 4000);
 
+// Log instead of dying silently; unhandled rejections still indicate a bug worth seeing.
+process.on('unhandledRejection', (err) => console.error('unhandled rejection:', err));
+
 async function start() {
-  await pool.query(SCHEMA); // ensure schema on boot (idempotent)
-  await pool.query(MIGRATIONS);
-  app.listen(PORT, () => console.log(`ClaudeLens server on http://localhost:${PORT}`));
+  // Migrations get their own connection with the pool's statement_timeout lifted: a table
+  // rewrite (e.g. adding search_tsv, ~40 s on prod) would otherwise be cancelled mid-boot and
+  // leave the server crash-looping.
+  const client = await pool.connect();
+  try {
+    await client.query('SET statement_timeout = 0');
+    await client.query(SCHEMA); // ensure schema on boot (idempotent)
+    await client.query(MIGRATIONS);
+  } finally {
+    client.release(true); // discard: don't return a no-timeout session to the pool
+  }
+  const server = app.listen(PORT, () => console.log(`ClaudeLens server on http://localhost:${PORT}`));
+  // Graceful stop on deploy: finish in-flight ingests, then close the pool.
+  const shutdown = (sig: string) => {
+    console.log(`${sig}: draining`);
+    server.close(() => pool.end().finally(() => process.exit(0)));
+    setTimeout(() => process.exit(1), 8000).unref();
+  };
+  process.on('SIGTERM', () => shutdown('SIGTERM'));
+  process.on('SIGINT', () => shutdown('SIGINT'));
 }
 
 start().catch((err) => {

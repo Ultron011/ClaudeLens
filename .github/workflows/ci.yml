@@ -1,0 +1,23 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm --filter @claudelens/shared test
+      - run: pnpm --filter @claudelens/web build
+      # plugin/dist is a committed artifact: fail if it doesn't match cli/src (a forgotten
+      # `pnpm plugin:build` ships stale plugin code with no other signal).
+      - run: pnpm plugin:build && git diff --exit-code plugin/dist

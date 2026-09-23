@@ -4,7 +4,16 @@ import 'dotenv/config';
 const connectionString =
   process.env.DATABASE_URL ?? 'postgres://claudelens:claudelens@localhost:5544/claudelens';
 
-export const pool = new pg.Pool({ connectionString });
+export const pool = new pg.Pool({
+  connectionString,
+  // Fail fast instead of hanging requests forever when the DB is down or saturated.
+  connectionTimeoutMillis: 5000,
+  statement_timeout: 20000,
+  idle_in_transaction_session_timeout: 30000,
+});
+// An idle client's error (e.g. DB container restart) is emitted on the pool; unhandled, it
+// crashes the process. The pool discards the broken client on its own.
+pool.on('error', (err) => console.error('pg pool error:', err.message));
 
 export const SCHEMA = `
 CREATE TABLE IF NOT EXISTS sessions (
@@ -30,7 +39,6 @@ CREATE TABLE IF NOT EXISTS sessions (
 
 CREATE INDEX IF NOT EXISTS sessions_created_idx  ON sessions (created_at DESC);
 CREATE INDEX IF NOT EXISTS sessions_featured_idx ON sessions (featured);
-CREATE INDEX IF NOT EXISTS sessions_author_idx   ON sessions (author);
 CREATE INDEX IF NOT EXISTS sessions_project_idx  ON sessions (author, project);
 CREATE INDEX IF NOT EXISTS sessions_tags_idx     ON sessions USING gin (tags);
 `;
@@ -49,6 +57,24 @@ ALTER TABLE sessions ADD COLUMN IF NOT EXISTS parser_version   int     NOT NULL 
 CREATE INDEX IF NOT EXISTS sessions_account_email_idx  ON sessions (account_email);
 CREATE INDEX IF NOT EXISTS sessions_started_idx        ON sessions (started_at DESC);
 CREATE INDEX IF NOT EXISTS sessions_author_started_idx ON sessions (author, started_at DESC);
+-- Redundant with the (author, project) and (author, started_at) composites; never scanned.
+DROP INDEX IF EXISTS sessions_author_idx;
+
+-- Transcript search. A plain ILIKE over transcript::text de-TOASTs every row (~4 s at 2k rows);
+-- this word index answers in <1 ms. First run rewrites the table (~30 s at 48 MB), once.
+-- 'simple' config: no stemming/stopwords — code identifiers and paths must match as typed.
+ALTER TABLE sessions ADD COLUMN IF NOT EXISTS search_tsv tsvector
+  GENERATED ALWAYS AS (to_tsvector('simple', coalesce(title, '') || ' ' || left(transcript::text, 400000))) STORED;
+CREATE INDEX IF NOT EXISTS sessions_search_idx ON sessions USING gin (search_tsv);
+
+-- One person under several author strings (e.g. "Saurabh" and "SAURABH" after a reconnect).
+-- Ingest rewrites an alias to its canonical author, so a merge sticks even when the old machine
+-- keeps uploading under the old name. Written by src/merge-authors.ts.
+CREATE TABLE IF NOT EXISTS author_aliases (
+  alias      text PRIMARY KEY,
+  canonical  text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
 
 -- A delete must STICK: without this the next Stop hook re-uploads what was just deleted.
 CREATE TABLE IF NOT EXISTS deletions (

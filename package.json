@@ -2,7 +2,7 @@
   "name": "claudelens",
   "private": true,
   "version": "0.1.0",
-  "description": "A lens into how your team works with Claude Code — an opt-in, self-hosted gallery of shared sessions for learning.",
+  "description": "A lens into how your team works with Claude Code \u2014 an opt-in, self-hosted gallery of shared sessions for learning.",
   "packageManager": "pnpm@10.26.2",
   "scripts": {
     "dev": "pnpm --parallel --filter server --filter web dev",
@@ -19,6 +19,12 @@
     "node": ">=20"
   },
   "pnpm": {
-    "onlyBuiltDependencies": ["esbuild"]
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ],
+    "overrides": {
+      "qs": "^6.16.0",
+      "body-parser@<1.20.6": "^1.20.6"
+    }
   }
 }
