@@ -1,9 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 import { getStats, type OrgStats } from '../api.js';
 import { useFetch } from '../useFetch.js';
 import { Icon, Logo } from './Icon.js';
 import { ToastProvider } from './Toast.js';
+import { INSIGHT_PAGES } from './insights/nav.js';
 
 /** `to` is the current page or an ancestor of it. Plain startsWith() marked "/u/Sau" current on
  *  "/u/Saurabh" — a prefix of the name, not of the path. */
@@ -112,6 +113,25 @@ function SideNav({ stats }: { stats: OrgStats | null }) {
         </NavLink>
       </div>
 
+      {/* Team-wide patterns that cut across sessions: decisions, tool reliability, agents. */}
+      <div className="nav-group">
+        <div className="nav-label" id="nav-insights">
+          Insights
+        </div>
+        <ul aria-labelledby="nav-insights" className="nav-list">
+          {INSIGHT_PAGES.map((p) => (
+            <li key={p.to}>
+              <NavLink to={p.to} className="nav-item">
+                <span className="nav-icon">
+                  <Icon name={p.icon} />
+                </span>
+                <span className="nav-text">{p.label}</span>
+              </NavLink>
+            </li>
+          ))}
+        </ul>
+      </div>
+
       {people.length > 0 && (
         <div className="nav-group nav-group--people">
           <div className="nav-label" id="nav-people">
@@ -156,7 +176,8 @@ function SideNav({ stats }: { stats: OrgStats | null }) {
  * halfway down a table. This is a fixed bottom tab bar instead: the three routes stay visible at
  * every scroll position, and Team opens a sheet listing everyone, so any person is one tap away
  * from any page. That drill path — team totals → one person → their projects — is the product's
- * whole purpose, and it was the thing narrow viewports had lost.
+ * whole purpose, and it was the thing narrow viewports had lost. Insights is the fifth tab (the
+ * most a 390px bar holds); its three pages share one tab and a strip in their page head.
  *
  * `end` on Overview and Analytics mirrors SideNav: without it "/" matches every nested route, and
  * "/analytics" would light up on "/analytics/models" alongside Models itself. */
@@ -247,7 +268,10 @@ function MobileNav({ stats }: { stats: OrgStats | null }) {
         </>
       )}
 
-      <nav className="mnav" aria-label="Primary">
+      {/* Columns follow the item count (styles.css authors a fixed 4-column grid). Five tabs is
+       * the ceiling at 390px — Insights is one tab that lands on Decisions; its pages switch
+       * between each other with the tab strip in their page head. */}
+      <nav className="mnav" aria-label="Primary" style={{ gridTemplateColumns: 'none', gridAutoFlow: 'column', gridAutoColumns: '1fr' }}>
         <NavLink to="/" end className="mnav-item">
           <Icon name="grid" />
           <span>Overview</span>
@@ -260,6 +284,16 @@ function MobileNav({ stats }: { stats: OrgStats | null }) {
           <Icon name="cpu" />
           <span>Models</span>
         </NavLink>
+        {/* Link, not NavLink: it must light up on all three /insights/* pages, not just the one
+         * it points at. */}
+        <Link
+          to="/insights/decisions"
+          className="mnav-item"
+          aria-current={isUnder(pathname, '/insights') ? 'page' : undefined}
+        >
+          <Icon name="layers" />
+          <span>Insights</span>
+        </Link>
         <button
           type="button"
           ref={teamBtn}

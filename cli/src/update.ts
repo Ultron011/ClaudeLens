@@ -8,10 +8,11 @@
 import { readFile, cp } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
+import { claudeConfigDir } from './config.js';
 
-const PLUGINS_DIR = join(homedir(), '.claude', 'plugins');
+// Plugins (and their marketplace registry) live per profile, under $CLAUDE_CONFIG_DIR.
+const PLUGINS_DIR = join(claudeConfigDir(), 'plugins');
 const MARKER = join('dist', 'claudelens.mjs'); // proves a dir is our plugin source
 
 function git(args: string[], cwd: string): boolean {

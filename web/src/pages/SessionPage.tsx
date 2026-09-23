@@ -12,10 +12,31 @@ import { TurnModeBadge, modalMode } from '../components/ModeBadges.js';
 import { useFetch } from '../useFetch.js';
 import { useToast, errText } from '../components/Toast.js';
 import { NotFoundPage } from './NotFoundPage.js';
+import { SessionTimeline } from '../components/session/SessionTimeline.js';
+import { PromptOutlineColumn, PromptOutlineToggle } from '../components/session/PromptOutline.js';
+import { ShortcutsHelp } from '../components/session/ShortcutsHelp.js';
+import {
+  BranchesFact,
+  FilesTouchedFact,
+  LinesMetric,
+  SlashCommandsFact,
+} from '../components/session/SessionFacts.js';
+import { ignoreShortcut, useMedia } from '../components/session/hooks.js';
+import '../styles.session.css';
+
+/** Where the prompt outline becomes a sticky side column instead of a popover. */
+const WIDE_QUERY = '(min-width: 1280px)';
 
 /** Claude Code injects a whole skill's markdown as a user-role turn; it isn't something the
  *  person typed, so it renders as a collapsed "skill loaded" line instead of a user bubble. */
 const SKILL_BODY = /^Base directory for this skill:\s*(\S+)/;
+
+// Pre-v9 rows have no `injected` flag, so recognise the common injected shapes by their text.
+const INJECTED_TEXT = /^(?:<task-notification>|<agent-message\b|Another Claude session sent a message|\[SYSTEM NOTIFICATION)/;
+
+/** A user-role turn nobody typed: skill bodies, task notifications, agent hand-backs. Kept out of
+ *  the prompt outline, the timeline's prompt ticks and j/k prompt stepping. */
+const isInjected = (t: Turn) => t.injected === true || SKILL_BODY.test(t.text) || INJECTED_TEXT.test(t.text);
 
 /** Everything find-in-transcript searches for one turn. */
 const turnHaystack = (t: Turn) =>
@@ -44,6 +65,22 @@ export function SessionPage() {
   const toast = useToast();
   const { hash } = useLocation();
   const turns = s?.turns ?? [];
+  const wide = useMedia(WIDE_QUERY);
+  const findRef = useRef<HTMLInputElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  // The sticky bar's height (it grew a timeline row, and wraps on narrow screens) feeds
+  // `--tbar-h`, which `.turn`'s scroll-margin uses so a jumped-to turn lands below the bar.
+  const hasBar = !!s;
+  useEffect(() => {
+    const bar = barRef.current;
+    const wrap = wrapRef.current;
+    if (!bar || !wrap) return;
+    const ro = new ResizeObserver(() => wrap.style.setProperty('--tbar-h', `${bar.offsetHeight}px`));
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [hasBar]);
 
   const goTo = useCallback((i: number) => {
     setReveal((r) => ({ i, v: r.v + 1 }));
@@ -66,7 +103,7 @@ export function SessionPage() {
   }, [hash, turns.length, goTo]);
 
   const promptIdx = useMemo(
-    () => turns.flatMap((t, i) => (t.role === 'user' && !SKILL_BODY.test(t.text) ? [i] : [])),
+    () => turns.flatMap((t, i) => (t.role === 'user' && !isInjected(t) ? [i] : [])),
     [turns],
   );
   const matches = useMemo(() => {
@@ -87,7 +124,7 @@ export function SessionPage() {
   const stepPrompt = useCallback(
     (dir: 1 | -1) => {
       const tops = promptIdx.map((i) => document.getElementById(`t-${i}`)?.getBoundingClientRect().top ?? 0);
-      const band = 90; // below the sticky bars
+      const band = barRef.current?.getBoundingClientRect().bottom ?? 90; // below the sticky bars
       const target =
         dir === 1
           ? promptIdx.find((_, k) => tops[k] > band + 4)
@@ -97,13 +134,20 @@ export function SessionPage() {
     [promptIdx, goTo],
   );
 
-  // j / k step between prompts, like a reader. Ignored while typing in any field.
+  // j / k step between prompts, like a reader; `/` jumps to find; `e` toggles Expand/Collapse all.
+  // Ignored while typing in any field or while a dialog is up. (`?` and `o` live with the help
+  // dialog and outline popover, which own that state so opening them doesn't re-render turns.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement;
-      if (e.metaKey || e.ctrlKey || e.altKey || el.closest('input, textarea, select, [contenteditable]')) return;
+      if (ignoreShortcut(e) || document.querySelector('dialog[open]')) return;
       if (e.key === 'j') stepPrompt(1);
       else if (e.key === 'k') stepPrompt(-1);
+      else if (e.key === 'e') setExpandAll((x) => ({ open: !x.open, v: x.v + 1 }));
+      else if (e.key === '/') {
+        e.preventDefault();
+        findRef.current?.focus();
+        findRef.current?.select();
+      }
     };
     document.addEventListener('keydown', onKey);
     return () => document.removeEventListener('keydown', onKey);
@@ -210,7 +254,7 @@ export function SessionPage() {
         </>
       }
     >
-      <div className="session-wrap">
+      <div className={`session-wrap${wide && promptIdx.length ? ' has-outline' : ''}`} ref={wrapRef}>
         {s.hidden && (
           <div className="notice">
             This session is <strong>hidden</strong> from the gallery and team stats. It still
@@ -248,6 +292,7 @@ export function SessionPage() {
             {st.durationMs ? <Metric label="duration" value={fmtDuration(st.durationMs)} /> : null}
             <Metric label="cost" value={fmtCost(st.estimatedCostUsd)} />
             <Metric label="models" value={st.models.join(', ') || '—'} />
+            <LinesMetric reported={st.reported} />
             {s.startedAt && <Metric label="started" value={fmtDateTime(s.startedAt)} />}
           </div>
           {/* One labelled block per kind, on a single spacing rhythm. Previously these were three
@@ -272,6 +317,7 @@ export function SessionPage() {
                 </dd>
               </div>
             )}
+            <SlashCommandsFact commands={st.slashCommands} />
             {st.subagentUsage && Object.keys(st.subagentUsage).length > 0 && (
               <div className="session-fact">
                 <dt>Subagent work</dt>
@@ -324,6 +370,8 @@ export function SessionPage() {
                 </dd>
               </div>
             ) : null}
+            <FilesTouchedFact files={st.files} />
+            <BranchesFact branches={st.gitBranches} headBranch={s.gitBranch} />
             {Object.keys(st.toolUsage).length > 0 && (
               <div className="session-fact">
                 <dt>Tools</dt>
@@ -341,82 +389,95 @@ export function SessionPage() {
           </dl>
         </div>
 
-        {/* Sticky: long sessions (1,500+ turns) need find and prompt-to-prompt jumps from any
-          * scroll position, not just the top. */}
-        <div className="transcript-bar" role="toolbar" aria-label="Transcript">
-          <form
-            className="transcript-find"
-            role="search"
-            onSubmit={(e) => {
-              e.preventDefault();
-              stepFind(1);
-            }}
-          >
-            <Icon name="search" size={12} />
-            <input
-              type="search"
-              placeholder="Find in transcript…"
-              aria-label="Find in transcript"
-              value={find}
-              onChange={(e) => {
-                setFind(e.target.value);
-                setFindPos(-1);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' && e.shiftKey) {
+        {/* Transcript column + (on wide screens) the prompt outline beside it. The bar is sticky
+          * within .session-main, which spans the whole transcript, so it pins all the way down. */}
+        <div className="session-body">
+          <div className="session-main">
+            {/* Sticky: long sessions (1,500+ turns) need find and prompt-to-prompt jumps from any
+              * scroll position, not just the top. */}
+            <div className="transcript-bar" role="toolbar" aria-label="Transcript" ref={barRef}>
+              <form
+                className="transcript-find"
+                role="search"
+                onSubmit={(e) => {
                   e.preventDefault();
-                  stepFind(-1);
-                }
-              }}
-            />
-            {find.trim().length >= 2 && (
-              <span className="find-count" aria-live="polite">
-                {matches.length ? `${Math.max(findPos, 0) + 1} of ${matches.length}` : 'no matches'}
-              </span>
-            )}
-            <button type="button" className="chip icon" aria-label="Previous match" disabled={!matches.length} onClick={() => stepFind(-1)}>
-              <Icon name="arrowUp" size={12} />
-            </button>
-            <button type="submit" className="chip icon" aria-label="Next match" disabled={!matches.length}>
-              <Icon name="arrowDown" size={12} />
-            </button>
-          </form>
-          <div className="transcript-bar-actions">
-            <span className="muted prompt-nav-label" title="Keyboard: j / k">
-              {promptIdx.length} prompts
-            </span>
-            <button type="button" className="chip icon" aria-label="Previous prompt (k)" title="Previous prompt (k)" onClick={() => stepPrompt(-1)}>
-              <Icon name="arrowUp" size={12} />
-            </button>
-            <button type="button" className="chip icon" aria-label="Next prompt (j)" title="Next prompt (j)" onClick={() => stepPrompt(1)}>
-              <Icon name="arrowDown" size={12} />
-            </button>
-            <button
-              type="button"
-              className="chip"
-              onClick={() => setExpandAll((x) => ({ open: !x.open, v: x.v + 1 }))}
-            >
-              <Icon name={expandAll.open ? 'chevronDown' : 'chevronRight'} size={12} />
-              {expandAll.open ? 'Collapse all' : 'Expand all'}
-            </button>
+                  stepFind(1);
+                }}
+              >
+                <Icon name="search" size={12} />
+                <input
+                  ref={findRef}
+                  type="search"
+                  placeholder="Find in transcript…"
+                  title="Find in transcript (/)"
+                  aria-label="Find in transcript"
+                  value={find}
+                  onChange={(e) => {
+                    setFind(e.target.value);
+                    setFindPos(-1);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && e.shiftKey) {
+                      e.preventDefault();
+                      stepFind(-1);
+                    } else if (e.key === 'Escape' && !find) e.currentTarget.blur();
+                  }}
+                />
+                {find.trim().length >= 2 && (
+                  <span className="find-count" aria-live="polite">
+                    {matches.length ? `${Math.max(findPos, 0) + 1} of ${matches.length}` : 'no matches'}
+                  </span>
+                )}
+                <button type="button" className="chip icon" aria-label="Previous match" disabled={!matches.length} onClick={() => stepFind(-1)}>
+                  <Icon name="arrowUp" size={12} />
+                </button>
+                <button type="submit" className="chip icon" aria-label="Next match" disabled={!matches.length}>
+                  <Icon name="arrowDown" size={12} />
+                </button>
+              </form>
+              <div className="transcript-bar-actions">
+                <span className="muted prompt-nav-label" title="Keyboard: j / k">
+                  {promptIdx.length} prompts
+                </span>
+                <button type="button" className="chip icon" aria-label="Previous prompt (k)" title="Previous prompt (k)" onClick={() => stepPrompt(-1)}>
+                  <Icon name="arrowUp" size={12} />
+                </button>
+                <button type="button" className="chip icon" aria-label="Next prompt (j)" title="Next prompt (j)" onClick={() => stepPrompt(1)}>
+                  <Icon name="arrowDown" size={12} />
+                </button>
+                <button
+                  type="button"
+                  className="chip"
+                  title="Keyboard: e"
+                  onClick={() => setExpandAll((x) => ({ open: !x.open, v: x.v + 1 }))}
+                >
+                  <Icon name={expandAll.open ? 'chevronDown' : 'chevronRight'} size={12} />
+                  {expandAll.open ? 'Collapse all' : 'Expand all'}
+                </button>
+                {!wide && <PromptOutlineToggle turns={s.turns} promptIdx={promptIdx} goTo={goTo} />}
+                <ShortcutsHelp />
+              </div>
+              {s.turns.length > 1 && <SessionTimeline turns={s.turns} promptIdx={promptIdx} goTo={goTo} />}
+            </div>
+            <div className="transcript">
+              {s.turns.map((t, i) => (
+                <TurnView
+                  key={i}
+                  index={i}
+                  turn={t}
+                  expandAll={expandAll}
+                  revealV={reveal.i === i ? reveal.v : 0}
+                  matched={matchSet.has(i)}
+                  current={matches[findPos] === i}
+                  onCopyLink={copyLink}
+                  modal={modal}
+                  prevMode={i > 0 ? s.turns[i - 1].permissionMode : undefined}
+                  author={s.author}
+                />
+              ))}
+            </div>
           </div>
-        </div>
-        <div className="transcript">
-          {s.turns.map((t, i) => (
-            <TurnView
-              key={i}
-              index={i}
-              turn={t}
-              expandAll={expandAll}
-              revealV={reveal.i === i ? reveal.v : 0}
-              matched={matchSet.has(i)}
-              current={matches[findPos] === i}
-              onCopyLink={copyLink}
-              modal={modal}
-              prevMode={i > 0 ? s.turns[i - 1].permissionMode : undefined}
-              author={s.author}
-            />
-          ))}
+          {wide && <PromptOutlineColumn turns={s.turns} promptIdx={promptIdx} goTo={goTo} />}
         </div>
       </div>
 
@@ -469,7 +530,7 @@ function TurnView({
   return (
     <article
       id={`t-${index}`}
-      className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}${skill ? ' injected' : ''}${matched ? ' matched' : ''}${current ? ' current' : ''}`}
+      className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}${isUser && isInjected(turn) ? ' injected' : ''}${matched ? ' matched' : ''}${current ? ' current' : ''}`}
     >
       <span className="turn-avatar" aria-hidden>
         <Icon name={isUser ? 'person' : turn.isSidechain ? 'people' : 'lens'} size={14} />

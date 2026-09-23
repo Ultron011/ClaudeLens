@@ -16,6 +16,10 @@ import { useOrgStats } from '../components/AppLayout.js';
 import { useFetch } from '../useFetch.js';
 import { useDateRange, usePref, useLayoutPref } from '../usePref.js';
 import { usePagedSessions } from '../usePagedSessions.js';
+import { getSparklines, type Sparklines } from '../api.trends.js';
+import { Sparkline } from '../components/trends/Sparkline.js';
+import { ProfileCard } from '../components/trends/ProfileCard.js';
+import { CalendarPanel, HourHeatmapPanel, useActivity } from '../components/trends/ActivityPanels.js';
 
 interface ProjectGroup {
   project: string;
@@ -55,6 +59,16 @@ export function UserPage() {
     [author, fromIso, toIso],
   );
   const [pending, setPending] = useState<ProjectGroup | null>(null);
+
+  // Trends — scoped by the exact author string, like /api/projects above.
+  const activity = useActivity({ author, from: fromIso, to: toIso });
+  const { data: sparks } = useFetch<Sparklines>(
+    (signal) => getSparklines({ by: 'project', author, from: fromIso, to: toIso, limit: 150 }, signal),
+    [author, fromIso, toIso],
+  );
+  // Missing = no messages in range, unless the server capped the list (then we just don't know).
+  const sparkFor = (project: string): number[] | null =>
+    sparks?.series.find((s) => s.key === project)?.values ?? (sparks && !sparks.truncated ? sparks.days.map(() => 0) : null);
 
   const flatQuery = { author, from: fromIso, to: toIso, sort };
   const flat = usePagedSessions(flatQuery, view === 'flat' ? JSON.stringify(flatQuery) : 'off');
@@ -158,6 +172,14 @@ export function UserPage() {
         )}
       </div>
 
+      <div className="bento trends-row">
+        <ProfileCard className="panel col-5" author={author} from={fromIso} to={toIso} activity={activity.data} />
+        <div className="col-7 stack">
+          <HourHeatmapPanel state={activity} who={label} />
+          <CalendarPanel state={activity} />
+        </div>
+      </div>
+
       <div className="bento">
         <section className="col-9">
           <div className="panel-head">
@@ -215,7 +237,7 @@ export function UserPage() {
             ) : shownGroups.length === 0 ? (
               <p className="muted">No project matches “{projectFilter}”.</p>
             ) : layout === 'table' ? (
-              <ProjectTable groups={shownGroups} href={projectHref} onDelete={setPending} />
+              <ProjectTable groups={shownGroups} href={projectHref} onDelete={setPending} sparks={sparks} sparkFor={sparkFor} />
             ) : (
               <div className="grid">
                 {shownGroups.map((g) => (
@@ -254,6 +276,11 @@ export function UserPage() {
                         />
                         <Stat label="cost" value={fmtCost(g.cost)} />
                       </div>
+                      {sparks && sparkFor(g.project) && (
+                        <div className="card-spark">
+                          <Sparkline values={sparkFor(g.project)!} days={sparks.days} width={240} height={28} label="Messages per day" />
+                        </div>
+                      )}
                     </div>
                     <div className="card-actions">
                       <button
@@ -364,10 +391,14 @@ function ProjectTable({
   groups,
   href,
   onDelete,
+  sparks,
+  sparkFor,
 }: {
   groups: ProjectGroup[];
   href: (project: string) => string;
   onDelete: (g: ProjectGroup) => void;
+  sparks: Sparklines | null;
+  sparkFor: (project: string) => number[] | null;
 }) {
   const columns: Column<ProjectGroup>[] = [
     {
@@ -395,7 +426,17 @@ function ProjectTable({
       numeric: true,
       sortable: true,
       sortValue: (g) => g.messages,
-      render: (g) => <span title={`${g.turns.toLocaleString()} Claude turns`}>{g.messages.toLocaleString()}</span>,
+      render: (g) => {
+        const v = sparkFor(g.project);
+        return (
+          <span className="num-spark">
+            {sparks && v && (
+              <Sparkline values={v} days={sparks.days} width={48} height={18} label={`${g.project}: messages per day`} />
+            )}
+            <span title={`${g.turns.toLocaleString()} Claude turns`}>{g.messages.toLocaleString()}</span>
+          </span>
+        );
+      },
     },
     {
       key: 'tokens',
@@ -436,6 +477,6 @@ function ProjectTable({
     },
   ];
   return (
-    <DataTable columns={columns} rows={groups} rowKey={(g) => g.project} caption="Projects" ariaLabel="Projects" />
+    <DataTable columns={columns} rows={groups} rowKey={(g) => g.project} caption="Projects" ariaLabel="Projects" className="trend-table" />
   );
 }

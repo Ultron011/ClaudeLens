@@ -57,6 +57,22 @@ the shape reference plus the invariants and legacy contract an agent must not vi
     costUsd, toolCalls}`), `interrupts`, `compactions`, `apiErrors`, `rateLimitHits`,
     `reported` (`{costUsd, linesAdded, linesRemoved}` from Claude Code's `cost-state` lines:
     last line per run/`startTime`, summed across runs; absent when the file has none).
+  - **v9 additions (all optional — absent on older rows):**
+    - `files: Record<path, {reads, edits, writes}>` — one count per `Read` (reads), `Edit` /
+      `MultiEdit` / `NotebookEdit` (edits) and `Write` (writes) tool_use, keyed by
+      `input.file_path` (`notebook_path` for NotebookEdit), **including subagent transcripts'**
+      calls (same as `toolUsage`). Keys: relative to the session `cwd` when at/under it (`cwd`
+      itself → `.`), else absolute; `\` normalized to `/`; passed through `redactText`
+      (unconditionally, like `args`). Capped at the 200 most-touched paths (ties: first touched
+      wins). Absent when no file tool ran. A tool call counts even if it was denied or errored.
+    - `gitBranches: string[]` — every distinct non-empty `gitBranch` on main-transcript lines,
+      first-seen order (`ParsedSession.gitBranch` is still just the first).
+    - `slashCommands: Record<'/name', count>` — human-run slash commands from the
+      `<command-name>` wrapper (see `claude-code-jsonl.md`), counted on non-meta, non-sidechain
+      `user` lines and `system` `local_command` lines, read before `cleanUserText` strips it.
+      Includes plugin/skill commands (`/claudelens:note`).
+    - On v9 rows `gitBranches`/`slashCommands` are always present (possibly empty); `files` is
+      omitted when empty. Consumers must still treat all three as optional for older rows.
   - **Token/cost accounting (v7):** Claude Code writes one assistant line per content block, all
     sharing `message.id` with identical `usage`. Usage is counted once per `message.id`
     (fallback `requestId`), and the split lines merge into ONE `Turn` — so `turns`,
@@ -160,7 +176,8 @@ clock — `durationMs` (session-level) stays the honest upper bound.
 
 ## Versioning / legacy contract
 
-`PARSER_VERSION` (`shared/src/parser.ts`, currently **8** — v8: full multi-line tool args) is stamped on every
+`PARSER_VERSION` (`shared/src/parser.ts`, currently **9** — v8: full multi-line tool args; v9:
+`files`, `gitBranches`, `slashCommands`) is stamped on every
 `ParsedSession.parserVersion` and stored per-row as `sessions.parser_version` (upsert takes
 `GREATEST(EXCLUDED.parser_version, sessions.parser_version)`, so a stale re-POST never
 regresses the stored version). It exists so a future shape-changing parser bump can make old

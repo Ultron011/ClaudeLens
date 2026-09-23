@@ -21,6 +21,7 @@ Claude Code session
         (cfg.redact, default TRUE), POST with a 15 s AbortSignal.timeout
       POST /api/sessions  { session: ParsedSession, author, account?, ... }
       on success: ledger backfilled[id] = PARSER_VERSION, backfilledMtime[id] = file mtime
+      every attempt: lastSyncAt / lastSyncOk / lastSyncError (shown by /claudelens:status)
   → SessionStart hook: `claudelens.mjs catchup` — detached, re-uploads ≤25 stale ledgered
       sessions (see "Backfill path")
   → server/src/index.ts: POST /api/sessions
@@ -54,6 +55,58 @@ for that scope leaves the machine:
 All local/config-file based — none of this touches the server. Config lives at
 `~/.claude/claudelens.json` (survives plugin updates) and is loaded fresh on every hook
 invocation; there is no daemon or cache across turns.
+
+## Multiple Claude Code profiles (`CLAUDE_CONFIG_DIR`)
+
+Claude Code keeps each profile's data under `$CLAUDE_CONFIG_DIR` (default `~/.claude`). Hooks and
+skill commands inherit Claude Code's env, so the CLI always sees the profile that ran it.
+Everything the CLI reads **from Claude Code** follows it (`cli/src/config.ts: claudeConfigDir()`,
+`projectsDir()`): transcripts (`history.ts` list/backfill/catch-up, `optout.ts`'s session-id
+fallback, `curate.ts`'s transcript lookup), the plugin registry (`update.ts`), and the account
+file (`account.ts: accountPath()` — `$CLAUDE_CONFIG_DIR/.claude.json`, but `~/.claude.json`
+*beside* the dir by default, matching Claude Code). Each profile's SessionStart catch-up and
+`sync-history` only see that profile's `projects/`; the Stop hook gets the transcript path in its
+payload so it needs no lookup.
+
+**Decision: ClaudeLens's own config does NOT move.** It stays at `~/.claude/claudelens.json` for
+every profile (it was already homedir-based, never per-profile), so one `/claudelens:connect`
+covers all profiles, and pause / untrack lists / the ledger are machine-wide. Session ids are UUIDs,
+so profiles sharing one ledger can't collide. `updateConfig` `mkdir -p`s `~/.claude` in case only
+a custom profile dir exists. Author is the same `resolveName()` for every profile; the account
+(email) is per profile, since it's read from that profile's `.claude.json`.
+
+## Status and the last-sync stamp
+
+`/claudelens:status` (`cli/src/status.ts`, skill passes `--root "${CLAUDE_PLUGIN_ROOT}"`, else it
+derives the root from the bundle path) prints server, Claude config dir in use (and whether it
+came from `CLAUDE_CONFIG_DIR`), plugin version (from `<root>/.claude-plugin/plugin.json`) + root,
+the ClaudeLens config path, author, account, parser version, paused state, the **last sync
+attempt**, per-dir tracking, exclusions and server health. The last-sync fields
+(`lastSyncAt` ISO, `lastSyncOk`, `lastSyncError` ≤300 chars) are written through the merge-safe
+`updateConfig` by `config.ts: recordSyncAttempt()` — per upload for the live Stop sync and the
+curate commands' sync (`sync.ts: uploadAndRecord`), once per batch for backfill / catch-up
+(`history.ts: uploadFiles`; concurrent workers share one tmp-file name, so per-file writes would
+race). A tombstoned upload counts as not-ok with a "deleted on the dashboard" error, since that's
+a real cause of "sessions stopped arriving". The stamp is best-effort and never throws.
+
+## Curating from Claude Code (`cli/src/curate.ts`)
+
+`/claudelens:note <text>` / `--clear`, `/claudelens:feature` / `--off`, `/claudelens:tag <tag…>` /
+`--clear` / (no args = show), `/claudelens:link` → CLI ops `note`, `feature`, `tag`, `link`, each
+passed `--session "${CLAUDE_SESSION_ID}"` (resolved exactly like `untrack`:
+`optout.ts: resolveSessionId`, falling back to the newest transcript for the cwd) and the author
+from `resolveName(cfg, account)` (same as sync). Each is one `POST /api/sessions/curate` with the
+ingest bearer token and `{sessionId, author, note?, tags?, featured?}`; no change fields = lookup
+(`link`). The note skill passes its text via a quoted heredoc (`--stdin`) so quotes/`$` survive
+the shell; the note is `redactText`-ed when `cfg.redact`.
+
+- **404 (not synced yet)** → find `<projects dir>/*/<id>.jsonl`, parse, `shouldSync` gate, upload
+  via `uploadAndRecord` (same path/ledger/status stamp as the Stop hook), retry the curate once.
+- **Opt-outs**: an untracked session / excluded project / `.claudelens` repo / `DO_NOT_TRACK`
+  sends nothing at all and says which switch. **Paused** still curates a session already on the
+  server (explicit user metadata) but never uploads a transcript to satisfy a 404.
+- Output is one line: `✔ Note saved — <server>/session/<id>`, the bare URL for `link`, or a
+  `✖`/explanatory line for network, 401/403 (re-connect), 400 (server's `error`).
 
 ## The O(n²) re-upload ceiling — deliberate, not fixed
 
@@ -124,7 +177,7 @@ working tree. Consequences:
 ## Backfill path (`cli/src/history.ts`)
 
 Two ops behind `/claudelens:sync-history`: `list-projects` (peeks the first ~80 lines of
-each `.jsonl` under `~/.claude/projects/<dir>` for `cwd`/`sessionId`, no full parse) and
+each `.jsonl` under `<projects dir>/<dir>` (`$CLAUDE_CONFIG_DIR/projects`, default `~/.claude/projects`) for `cwd`/`sessionId`, no full parse) and
 `sync-history` (full parse incl. subagents + the same `uploadSession()` as live sync, per
 selected project dir).
 

@@ -24,13 +24,30 @@
 //
 // Config lives at ~/.claude/claudelens.json (survives plugin updates). Nothing
 // syncs until `server` is set — connecting is the enablement step.
-import { readFile, writeFile, rename } from 'node:fs/promises';
+//
+// Multiple Claude Code profiles: everything read FROM Claude Code (projects/, plugins/,
+// .claude.json) follows CLAUDE_CONFIG_DIR — see claudeConfigDir(). This file deliberately does
+// NOT: it stays at ~/.claude/claudelens.json whatever profile is active, so one connect (and one
+// pause / untrack list / ledger) covers every profile on the machine. Session ids are UUIDs, so
+// profiles sharing one ledger can't collide.
+import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { homedir, userInfo } from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { join, resolve, sep, dirname, parse as parsePath } from 'node:path';
 import type { AccountIdentity } from '@claudelens/shared';
 
 export const CONFIG_PATH = join(homedir(), '.claude', 'claudelens.json');
+
+/** Claude Code's own data dir for the ACTIVE profile: $CLAUDE_CONFIG_DIR, else ~/.claude. The
+ *  hooks and skills inherit Claude Code's env, so this is the profile that ran them. */
+export function claudeConfigDir(): string {
+  return process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), '.claude');
+}
+
+/** Where Claude Code writes transcripts: `<config dir>/projects/<encoded cwd>/<session>.jsonl`. */
+export function projectsDir(): string {
+  return join(claudeConfigDir(), 'projects');
+}
 
 /** Filename of the committed, team-shared repo exclusion marker. */
 export const REPO_MARKER = '.claudelens';
@@ -59,6 +76,12 @@ export interface ClaudeLensConfig {
   /** Attach the signed-in account (email/org/etc.) to syncs. Default true; set
    *  false to opt out of sharing identity while still syncing transcripts. */
   shareAccount?: boolean;
+  /** The last upload attempt (live sync, backfill batch, catch-up, curate) — for /claudelens:status,
+   *  so "my sessions stopped arriving" is one command to diagnose. ISO time. */
+  lastSyncAt?: string;
+  lastSyncOk?: boolean;
+  /** Why the last attempt failed (absent when it succeeded). */
+  lastSyncError?: string;
 }
 
 const EMPTY: ClaudeLensConfig = {
@@ -105,6 +128,9 @@ function normalize(parsed: RawConfig): ClaudeLensConfig {
     backfilled: migrateBackfilled(parsed),
     backfilledMtime: parsed.backfilledMtime ?? {},
     shareAccount: parsed.shareAccount,
+    lastSyncAt: parsed.lastSyncAt,
+    lastSyncOk: parsed.lastSyncOk,
+    lastSyncError: parsed.lastSyncError,
   };
 }
 
@@ -135,6 +161,8 @@ export async function updateConfig(mutate: (cfg: ClaudeLensConfig) => void): Pro
   mutate(cfg);
   const { backfilledSessions: _legacy, ...rest } = raw;
   const tmp = `${CONFIG_PATH}.${process.pid}.tmp`;
+  // ~/.claude may not exist when the user only runs Claude Code under a CLAUDE_CONFIG_DIR profile.
+  await mkdir(dirname(CONFIG_PATH), { recursive: true });
   await writeFile(tmp, JSON.stringify({ ...rest, ...cfg }, null, 2) + '\n', 'utf8');
   await rename(tmp, CONFIG_PATH);
   return cfg;
@@ -149,6 +177,29 @@ export async function recordSynced(done: Record<string, { version: number; mtime
       if (mtime !== undefined) cfg.backfilledMtime[id] = Math.max(cfg.backfilledMtime[id] ?? 0, mtime);
     }
   });
+}
+
+/** One-line reason for an upload failure: fetch's bare "fetch failed" hides the useful part
+ *  (ECONNREFUSED, ENOTFOUND, a timeout) in `cause`. */
+export function describeError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err);
+  const cause = (err as Error & { cause?: { code?: string; message?: string } }).cause;
+  const detail = cause?.code ?? cause?.message;
+  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message;
+}
+
+/** Stamp the outcome of an upload attempt for /claudelens:status. Best-effort: a failed write
+ *  here must never turn a successful sync into an error (README contract #3). */
+export async function recordSyncAttempt(ok: boolean, error?: string): Promise<void> {
+  try {
+    await updateConfig((cfg) => {
+      cfg.lastSyncAt = new Date().toISOString();
+      cfg.lastSyncOk = ok;
+      cfg.lastSyncError = ok ? undefined : error?.slice(0, 300);
+    });
+  } catch {
+    /* unwritable config — status just shows the previous attempt */
+  }
 }
 
 /** True once the plugin knows where to send — i.e. connect has run (or env is set). */

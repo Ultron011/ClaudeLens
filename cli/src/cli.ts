@@ -27,6 +27,11 @@ async function main() {
       return (await import('./optout.js')).runPause();
     case 'resume': // /claudelens:resume
       return (await import('./optout.js')).runResume();
+    case 'note': // /claudelens:note
+    case 'feature': // /claudelens:feature
+    case 'tag': // /claudelens:tag
+    case 'link': // /claudelens:link
+      return (await import('./curate.js')).runCurate(op);
     case 'status': // /claudelens:status
       return (await import('./status.js')).runStatus();
     case 'update': // /claudelens:update

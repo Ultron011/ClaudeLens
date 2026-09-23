@@ -4,6 +4,7 @@ import type {
   AskedQuestion,
   ContentBlock,
   DailyStats,
+  FileTouches,
   ModelUsage,
   ParseOptions,
   ParsedSession,
@@ -19,7 +20,7 @@ import { redactText } from './redact.js';
 
 /** Backfill ledger key: bump this when the parser's output shape changes so old sessions
  *  auto-re-sync instead of being skipped forever. */
-export const PARSER_VERSION = 8;
+export const PARSER_VERSION = 9;
 
 /** Tool input kept per call. Large enough for real multi-line commands (heredocs, scripts) — the
  *  dashboard shows the first line and expands to the rest — while file bodies stay excluded by
@@ -177,6 +178,35 @@ function applyAnswers(tc: ToolCall, result: unknown, isError?: boolean) {
   }
 }
 
+// The human's slash commands (`/model`, `/claudelens:status`, …) arrive wrapped as
+// `<command-name>/model</command-name>` — in a `user` line, or a `system` `local_command` line for
+// commands that never reach the model (one or the other, never both). Read before cleanUserText
+// strips the wrapper. Older / plugin wrappers may omit the slash, so it's normalized on.
+const COMMAND_NAME = /<command-name>\s*([^<\s]+)\s*<\/command-name>/g;
+
+function slashCommandsIn(text: string): string[] {
+  return [...text.matchAll(COMMAND_NAME)].map((m) => (m[1].startsWith('/') ? m[1] : `/${m[1]}`));
+}
+
+/** File-touching tools -> which `FileTouches` counter a call bumps. */
+const FILE_TOOLS: Record<string, keyof FileTouches> = {
+  Read: 'reads',
+  Edit: 'edits',
+  MultiEdit: 'edits',
+  NotebookEdit: 'edits',
+  Write: 'writes',
+};
+const FILES_CAP = 200;
+
+/** `path` relative to `cwd` when at/under it, else as-is; '/' separators either way. */
+function relativeTo(path: string, cwd: string | undefined): string {
+  const p = path.replace(/\\/g, '/');
+  if (!cwd) return p;
+  const root = cwd.replace(/\\/g, '/').replace(/\/+$/, '');
+  if (p === root) return '.';
+  return root && p.startsWith(root + '/') ? p.slice(root.length + 1) : p;
+}
+
 function basename(p?: string): string | undefined {
   if (!p) return undefined;
   const parts = p.replace(/\/+$/, '').split('/');
@@ -227,6 +257,21 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
   const models = new Set<string>();
   const modelUsage: Record<string, ModelUsage> = {};
   const daily: Record<string, DailyStats> = {};
+  // Raw (absolute, as written) path -> touches; made cwd-relative + redacted + capped at the end.
+  const fileTouches = new Map<string, FileTouches>();
+  const noteFile = (name: string, input?: Record<string, unknown>) => {
+    const kind = FILE_TOOLS[name];
+    const path = input?.file_path ?? input?.notebook_path;
+    if (!kind || typeof path !== 'string' || !path.trim()) return;
+    let t = fileTouches.get(path);
+    if (!t) fileTouches.set(path, (t = { reads: 0, edits: 0, writes: 0 }));
+    t[kind] += 1;
+  };
+  const gitBranches: string[] = [];
+  const slashCommands: Record<string, number> = {};
+  const noteSlash = (text: string) => {
+    for (const c of slashCommandsIn(text)) slashCommands[c] = (slashCommands[c] ?? 0) + 1;
+  };
   // Every tool call by tool_use id, awaiting its tool_result (which arrives in a later user line).
   const callsById = new Map<string, ToolCall>();
   // Task/Agent tool_use id -> subagent type, to name a subagent transcript lacking meta.agentType.
@@ -337,7 +382,8 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
   const pushUserTurn = (e: RawEntry, text: string, toolCalls: ToolCall[] = []) => {
     const day = e.timestamp?.slice(0, 10);
     if (day) ensureDay(day).turns += 1;
-    if (isGenuineHumanTurn(e)) {
+    const genuine = isGenuineHumanTurn(e);
+    if (genuine) {
       userMessages += 1;
       if (day) ensureDay(day).userMessages += 1;
     }
@@ -348,6 +394,7 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
       toolCalls,
       isSidechain: e.isSidechain,
       permissionMode: currentMode,
+      ...(genuine ? {} : { injected: true }),
     });
   };
 
@@ -355,6 +402,7 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
     if (e.gitBranch && !gitBranch) gitBranch = e.gitBranch;
+    if (e.gitBranch && !gitBranches.includes(e.gitBranch)) gitBranches.push(e.gitBranch);
     if (e.version && !version) version = e.version;
     if (e.type === 'ai-title' && e.aiTitle) title = e.aiTitle;
 
@@ -367,6 +415,7 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
     if (e.type === 'system') {
       if (e.subtype === 'turn_duration' && typeof e.durationMs === 'number') addActive(e.durationMs);
       if (e.subtype === 'compact_boundary') compactions++;
+      if (e.subtype === 'local_command' && typeof e.content === 'string' && !e.isSidechain) noteSlash(e.content);
       continue;
     }
     if (e.type === 'cost-state') {
@@ -427,6 +476,7 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
       else if (b.type === 'thinking' && b.thinking) thinkingParts.push(b.thinking);
       else if (b.type === 'tool_use' && b.name) {
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        noteFile(b.name, b.input);
         const detail = toolDetail(b.name, b.input);
         if (b.name === 'Skill' && detail) skills.add(detail);
         if ((b.name === 'Task' || b.name === 'Agent') && detail) {
@@ -454,6 +504,8 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
     }
 
     const rawText = textParts.join('\n\n').trim();
+    // Before cleanUserText strips the wrapper. isMeta/sidechain lines weren't typed by the human.
+    if (e.type === 'user' && !e.isSidechain && e.isMeta !== true) noteSlash(rawText);
     // Strip injected scaffolding from user turns; keep assistant text verbatim.
     const text = e.type === 'user' ? cleanUserText(rawText) : rawText;
 
@@ -527,6 +579,7 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
       for (const b of asBlocks(e.message.content)) {
         if (b.type !== 'tool_use' || !b.name) continue;
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        noteFile(b.name, b.input);
         su.toolCalls += 1;
       }
     }
@@ -574,6 +627,22 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
     reported.costUsd = Math.round(reported.costUsd * 10000) / 10000;
   }
 
+  // Top FILES_CAP paths by total touches (stable: first-touched wins ties). Redacting a path can
+  // collapse two into one key, so counts merge rather than overwrite.
+  let files: Record<string, FileTouches> | undefined;
+  if (fileTouches.size) {
+    files = {};
+    const total = (t: FileTouches) => t.reads + t.edits + t.writes;
+    const top = [...fileTouches].sort((a, b) => total(b[1]) - total(a[1])).slice(0, FILES_CAP);
+    for (const [path, t] of top) {
+      const key = redactText(relativeTo(path, cwd)).text;
+      const into = (files[key] ??= { reads: 0, edits: 0, writes: 0 });
+      into.reads += t.reads;
+      into.edits += t.edits;
+      into.writes += t.writes;
+    }
+  }
+
   const stats: SessionStats = {
     turns: turns.length,
     userMessages,
@@ -603,6 +672,9 @@ export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedS
     apiErrors,
     rateLimitHits,
     reported,
+    files,
+    gitBranches,
+    slashCommands,
   };
 
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;

@@ -1,4 +1,4 @@
-// Historical backfill: bulk-sync sessions from ~/.claude/projects that existed
+// Historical backfill: bulk-sync sessions from <claude config dir>/projects that existed
 // before ClaudeLens was installed (or predate the Stop hook ever firing).
 // Three entry points:
 //   `list-projects`   — enumerate what's on disk so the agent can present a
@@ -12,7 +12,6 @@
 // All of them reuse the exact same parse + upsert path as the live Stop-hook
 // sync (upload.ts), so a backfilled session is indistinguishable from a live one.
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { homedir } from 'node:os';
 import { basename, join, resolve } from 'node:path';
 import { PARSER_VERSION } from '@claudelens/shared';
 import type { AccountIdentity } from '@claudelens/shared';
@@ -24,16 +23,21 @@ import {
   isConnected,
   recordSynced,
   envOptedOut,
+  projectsDir,
+  recordSyncAttempt,
+  describeError,
 } from './config.js';
 import { readAccount } from './account.js';
 import { parseSessionFile, uploadSession } from './upload.js';
 import { isDetached, spawnDetached } from './sync.js';
 
-const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+// $CLAUDE_CONFIG_DIR/projects (default ~/.claude/projects) — the ACTIVE profile only. Each
+// profile's own SessionStart / sync-history covers its own transcripts.
+const PROJECTS_DIR = projectsDir();
 
 interface ProjectEntry {
   index: number;
-  /** Encoded folder name under ~/.claude/projects (the identifier sync-history takes). */
+  /** Encoded folder name under the projects dir (the identifier sync-history takes). */
   dir: string;
   cwd?: string;
   sessions: number;
@@ -48,6 +52,9 @@ export interface BackfillResult {
   failed: number;
   /** Previously-synced sessions re-uploaded because PARSER_VERSION advanced. */
   upgraded: number;
+  /** Uploads attempted / the last failure's reason, for the status line (recordSyncAttempt). */
+  attempted?: number;
+  lastError?: string;
 }
 
 async function jsonlFiles(dir: string): Promise<string[]> {
@@ -133,7 +140,7 @@ export async function runListProjects(): Promise<void> {
   }
   const entries = await listProjects();
   if (!entries.length) {
-    console.log('No project history found under ~/.claude/projects.');
+    console.log(`No project history found under ${PROJECTS_DIR}.`);
     return;
   }
   console.log(JSON.stringify(entries, null, 2));
@@ -156,7 +163,7 @@ function selectDirs(all: ProjectEntry[]): string[] {
   return [...new Set(out)];
 }
 
-/** Map a cwd to its `~/.claude/projects/<encoded>` dir by reusing listProjects'
+/** Map a cwd to its `<projects dir>/<encoded>` dir by reusing listProjects'
  *  peek()-based cwd match — never reimplement Claude Code's path encoding. */
 async function findProjectDir(cwd: string): Promise<string | undefined> {
   const target = resolve(cwd);
@@ -198,6 +205,7 @@ async function backfillOne(
       return;
     }
 
+    result.attempted = (result.attempted ?? 0) + 1;
     if (!(await uploadSession(session, cfg, author, account))) {
       result.skipped++; // tombstoned server-side; now in the local opt-out lists
       return;
@@ -208,6 +216,7 @@ async function backfillOne(
     result.synced++;
   } catch (err) {
     result.failed++;
+    result.lastError = describeError(err);
     if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
   }
 }
@@ -229,11 +238,19 @@ async function uploadFiles(
       await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result, done);
     }
   };
+  const failedBefore = result.failed;
+  const attemptedBefore = result.attempted ?? 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
   await recordSynced(done);
+  // One status stamp per batch, not per file: concurrent workers share this process's config
+  // tmp-file name, so per-upload writes here would race each other.
+  if ((result.attempted ?? 0) > attemptedBefore || result.failed > failedBefore) {
+    const failed = result.failed - failedBefore;
+    await recordSyncAttempt(failed === 0, failed ? `${failed} of ${files.length} failed: ${result.lastError}` : undefined);
+  }
 }
 
-/** Upload every session under the given `~/.claude/projects` dir names. Bounded
+/** Upload every session under the given `<projects dir>` dir names. Bounded
  *  concurrency so hundreds of sessions don't upload one at a time. */
 export async function backfillDirs(dirs: string[], opts: { force?: boolean; concurrency?: number } = {}): Promise<BackfillResult> {
   const result: BackfillResult = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };

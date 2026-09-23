@@ -79,6 +79,8 @@ export interface RawEntry {
   aiTitle?: string;
   isSidechain?: boolean;
   subtype?: string;
+  /** `type:"system"` lines' own text, e.g. a `local_command` line's `<command-name>` wrapper. */
+  content?: unknown;
   durationMs?: number;
   permissionMode?: PermissionMode;
   /** Present when a user turn was injected rather than typed (e.g. `task-notification`). */
@@ -125,6 +127,9 @@ export interface Turn {
   toolCalls: ToolCall[];
   isSidechain?: boolean;
   permissionMode?: PermissionMode;
+  /** User-role turn that no person typed (task notifications, agent messages, system prompts) —
+   *  same test as the `userMessages` count. v9+; absent = unknown on older rows. */
+  injected?: boolean;
 }
 
 export interface ToolCall {
@@ -207,6 +212,22 @@ export interface SessionStats {
   /** Claude Code's own accounting from `cost-state` lines (last per run, summed across runs).
    *  Absent when the transcript has none. */
   reported?: { costUsd: number; linesAdded: number; linesRemoved: number };
+  // ── parser v9+ (absent on older rows) ──
+  /** file path -> Read / Edit+MultiEdit+NotebookEdit / Write calls (main transcript + subagents).
+   *  Relative to the session cwd when under it, else absolute; '/' separators; redacted; capped at
+   *  the 200 most-touched paths. */
+  files?: Record<string, FileTouches>;
+  /** every distinct `gitBranch` seen on transcript lines, first-seen order */
+  gitBranches?: string[];
+  /** slash command the human ran (incl. the leading slash, e.g. "/model", "/claudelens:status")
+   *  -> count, from Claude Code's `<command-name>` wrapper */
+  slashCommands?: Record<string, number>;
+}
+
+export interface FileTouches {
+  reads: number;
+  edits: number;
+  writes: number;
 }
 
 export interface SubagentUsage {

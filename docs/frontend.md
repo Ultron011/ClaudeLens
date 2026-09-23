@@ -242,3 +242,18 @@ All routes are children of the `AppLayout` layout route.
 | `/u/:author` | `UserPage` | One person: grouped-by-project (default) or flat sessions (`?view=`), each table/cards (`?layout=`). |
 | `/u/:author/:project` | `ProjectPage` | One project under one author: its sessions, project-level delete. |
 | `/session/:id` | `SessionPage` | One session's transcript: turns, tool calls, account/mode info, delete. Everything in a turn is an accordion driven by one hook (`useSyncedOpen`: follows Expand/Collapse-all, forced open by permalink/find/prompt-jump): message text over one line or >140 chars (`CollapsibleText`), thinking, and tool calls (`ToolCallRow`: one summary line, opens to the full multi-line input; inputs that fit on a line render flat); AskUserQuestion calls render each question → answer, opening to options/picks/notes (`ToolCall.questions`, parser v6+). |
+| `/search` | `SearchPage` | Team-wide session search/filters (q, transcript words, person, featured, hidden, sort) — all URL state. |
+| `/insights/decisions` | `DecisionsPage` | Every AskUserQuestion: options, pick (recommended / other option / own answer), notes, deep link `#t-<turn>`. |
+| `/insights/tools` | `ToolsPage` | Tool failure rates (v7+ coverage noted), weekly trend, MCP servers, denial kinds. |
+| `/insights/agents` | `AgentsPage` | Subagent types (runs, people, cost v7+) and skills (uses, people, weekly). |
+
+Session page extras (`components/session/*`, `styles.session.css`): `SessionTimeline` (one SVG over the
+whole session — prompt ticks, failures, AskUserQuestion rings, compressed idle-gap notches, viewport
+window; click/drag/arrow keys to jump), `PromptOutline` (sticky side column ≥1280px, popover below),
+`ShortcutsHelp` (`?`, `/`, `e`, `o`, j/k), `SessionFacts` (files touched, branches, slash commands).
+User-role turns nobody typed (`Turn.injected`, v9, plus a text fallback for older rows) are kept out
+of prompts everywhere. Trend widgets live in `components/trends/*` (Sparkline, Hour/Calendar heatmaps,
+ProfileCard, EfficiencyPanel, DeltaBadge, FilesPanel) with `styles.trends.css`; insights chrome in
+`components/insights/*` with `styles.insights.css`. Those stylesheets load before `styles.css`
+(page imports precede the global import in main.tsx), so overrides of shared classes need higher
+specificity.

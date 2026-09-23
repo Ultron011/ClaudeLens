@@ -13,6 +13,7 @@ import { DateRangePicker } from '../components/DateRangePicker.js';
 import { useDateRange, useLayoutPref } from '../usePref.js';
 import { useFetch } from '../useFetch.js';
 import { usePagedSessions } from '../usePagedSessions.js';
+import { FilesPanel } from '../components/trends/FilesPanel.js';
 
 export function ProjectPage() {
   const { author = '', project = '' } = useParams<{ author: string; project: string }>();
@@ -209,6 +210,8 @@ export function ProjectPage() {
               </div>
             )}
           </section>
+
+          <FilesPanel author={author} project={project} from={fromIso} to={toIso} />
 
           <section className="panel">
             <div className="panel-head tight">

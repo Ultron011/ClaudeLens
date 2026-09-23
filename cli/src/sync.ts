@@ -11,7 +11,18 @@ import { spawn } from 'node:child_process';
 import { readFile, stat } from 'node:fs/promises';
 import { parseTranscript, PARSER_VERSION } from '@claudelens/shared';
 import type { ParsedSession } from '@claudelens/shared';
-import { loadConfig, shouldSync, resolveName, updateConfig, recordSynced, envOptedOut, isConnected } from './config.js';
+import {
+  type ClaudeLensConfig,
+  loadConfig,
+  shouldSync,
+  resolveName,
+  updateConfig,
+  recordSynced,
+  recordSyncAttempt,
+  describeError,
+  envOptedOut,
+  isConnected,
+} from './config.js';
 import { readAccount } from './account.js';
 import { readSubagents, uploadSession } from './upload.js';
 
@@ -122,8 +133,29 @@ async function syncNow(transcriptPath: string, cwd: string, sessionId: string | 
     });
   }
 
-  const account = cfg.shareAccount === false ? undefined : await readAccount();
-  if (await uploadSession(session, cfg, resolveName(cfg, account), account)) {
-    await recordSynced({ [id]: { version: PARSER_VERSION, mtime } });
-  }
+  await uploadAndRecord(session, cfg, mtime);
 }
+
+/**
+ * Upload one parsed session as its author and record the outcome: the status stamp
+ * (recordSyncAttempt) always, the ledger only when the server accepted it. Throws on an upload
+ * error after stamping it — the Stop hook's caller swallows it (cli.ts). Shared by the live sync and
+ * the curate commands' "not synced yet" path.
+ */
+export async function uploadAndRecord(session: ParsedSession, cfg: ClaudeLensConfig, mtime: number): Promise<boolean> {
+  const account = cfg.shareAccount === false ? undefined : await readAccount();
+  let accepted: boolean;
+  try {
+    accepted = await uploadSession(session, cfg, resolveName(cfg, account), account);
+  } catch (err) {
+    await recordSyncAttempt(false, describeError(err));
+    throw err;
+  }
+  await recordSyncAttempt(accepted, accepted ? undefined : TOMBSTONED);
+  if (accepted) await recordSynced({ [session.sessionId]: { version: PARSER_VERSION, mtime } });
+  return accepted;
+}
+
+/** lastSyncError when the server answered `{ignored}` — the usual cause of "my sessions stopped
+ *  arriving" after someone deleted them on the dashboard. */
+export const TOMBSTONED = 'server ignored it: deleted on the dashboard, so now untracked locally';

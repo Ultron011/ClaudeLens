@@ -455,6 +455,13 @@ export function ModelAnalyticsPage() {
                     Most-used Claude Code tools in this range, with how often each call failed.
                   </p>
                 </div>
+                <Link
+                  to={`/insights/tools${identity ? `?person=${encodeURIComponent(identity)}` : ''}`}
+                  className="chip"
+                >
+                  Tool reliability
+                  <Icon name="arrowUpRight" size={12} />
+                </Link>
               </div>
               {loading && !data ? (
                 <div className="skel skel-chart" />

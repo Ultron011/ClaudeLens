@@ -1,0 +1,125 @@
+/* Trends: delta badges, sparklines, multi-line trend charts, heatmaps, profile card.
+ * Tokens only (styles.css) — both themes follow automatically. Class names are all new, so the
+ * load order relative to styles.css / styles.extra.css doesn't matter. No `overflow` other than
+ * visible on anything that could contain a sticky descendant (gotchas #4); the one scroll box
+ * (.calmap-scroll) holds only the calendar grid. */
+
+/* ---- delta badge (KPI foot) ---- */
+.delta {
+  display: inline-flex; align-items: center; gap: 3px;
+  font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text-dim);
+  white-space: nowrap;
+}
+.delta svg { flex-shrink: 0; }
+.delta[data-mood='good'] { color: var(--success); }
+.delta[data-mood='bad'] { color: var(--warning); }
+.delta-label { font-weight: 400; color: var(--text-faint); margin-left: 3px; }
+.kpi.is-primary .delta, .kpi.is-primary .delta-label { color: inherit; }
+.kpi-foot .delta + .kpi-foot-rest::before { content: ' · '; }
+.kpi-foot-rest { color: inherit; }
+
+/* ---- sparkline ---- */
+.spark { display: block; overflow: visible; }
+.spark-cell { display: inline-flex; vertical-align: middle; }
+.card-spark { margin-top: var(--s3); pointer-events: none; } /* the whole card is the link */
+.card-spark .spark { width: 100%; }
+
+/* ---- multi-line trend charts ---- */
+.eff-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s5); }
+.eff-grid > * { min-width: 0; }
+@media (max-width: 1000px) { .eff-grid { grid-template-columns: minmax(0, 1fr); } }
+.eff-title {
+  margin: 0 0 var(--s2); font-size: var(--fs-xs); font-weight: 600; letter-spacing: 0.04em;
+  text-transform: uppercase; color: var(--text-faint);
+}
+.eff-empty { padding: var(--s6) 0; }
+.trend-note { margin: calc(-1 * var(--s2)) 0 var(--s4); font-size: var(--fs-sm); color: var(--text-faint); }
+.panel .trend-note:last-child { margin: var(--s3) 0 0; }
+
+/* ---- shared heat ramp: one hue, sunken surface -> viz primary ---- */
+.heat-cell {
+  /* Empty = a faint ink wash over the card, so the grid reads on both the light and dark card. */
+  --heat-0: color-mix(in srgb, var(--text) 7%, var(--bg-card));
+  display: block; border-radius: 3px; background: var(--heat-0);
+}
+.heat-cell[data-level='1'] { background: color-mix(in oklab, var(--viz-primary) 26%, var(--heat-0)); }
+.heat-cell[data-level='2'] { background: color-mix(in oklab, var(--viz-primary) 48%, var(--heat-0)); }
+.heat-cell[data-level='3'] { background: color-mix(in oklab, var(--viz-primary) 72%, var(--heat-0)); }
+.heat-cell[data-level='4'] { background: var(--viz-primary); }
+.heat-cell.is-active { outline: 2px solid var(--text); outline-offset: 1px; }
+.heat-foot { display: flex; align-items: center; justify-content: space-between; gap: var(--s3); flex-wrap: wrap; }
+.heat-foot .chart-readout { flex: 1 1 auto; }
+.heat-legend {
+  display: inline-flex; align-items: center; gap: 3px; font-size: var(--fs-xs); color: var(--text-faint);
+  margin-top: var(--s2);
+}
+.heat-legend .heat-cell { width: 10px; height: 10px; }
+.heat-legend .heat-cell:first-of-type { margin-left: 4px; }
+.heat-legend .heat-cell:last-of-type { margin-right: 4px; }
+.skel-heat { height: 190px; border-radius: var(--r-md); }
+
+/* ---- hour-of-week heatmap ---- */
+.hourmap-grid {
+  display: grid; grid-template-columns: 30px repeat(24, minmax(0, 1fr)); gap: 2px;
+  font-size: var(--fs-2xs); color: var(--text-faint); border-radius: var(--r-sm);
+}
+.hourmap-grid:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; }
+.hourmap-row { display: contents; }
+.hourmap-hour { text-align: left; font-variant-numeric: tabular-nums; line-height: 14px; }
+.hourmap-day { line-height: 1; align-self: center; }
+.hourmap-grid .heat-cell { aspect-ratio: 1 / 1; min-height: 12px; max-height: 26px; }
+
+/* ---- calendar heatmap ---- */
+.calmap { --cal-cell: 12px; }
+.calmap-scroll { overflow-x: auto; padding: 4px 4px 2px; margin: -4px -4px 0; }
+.calmap-grid {
+  display: inline-grid; grid-template-rows: 14px repeat(7, var(--cal-cell)); gap: 3px;
+  font-size: var(--fs-2xs); color: var(--text-faint); border-radius: var(--r-sm);
+}
+.calmap-grid:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.calmap-month { white-space: nowrap; overflow: visible; width: 0; line-height: 14px; }
+.calmap-day { padding-right: 6px; line-height: var(--cal-cell); }
+@media (min-width: 1300px) { .calmap { --cal-cell: 13px; } }
+@media (max-width: 720px) { .calmap { --cal-cell: 10px; } .calmap-grid { gap: 2px; } }
+
+/* ---- profile card ---- */
+.profile { display: flex; flex-direction: column; gap: var(--s5); }
+.profile-stats {
+  display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: var(--s3) var(--s4);
+  margin: 0;
+}
+.profile-stats > div {
+  padding: var(--s2) var(--s3); border: 1px solid var(--border-soft); border-radius: var(--r-md);
+  background: var(--bg-elev); min-width: 0;
+}
+.profile-stats dt { font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--text-faint); }
+.profile-stats dd {
+  margin: 2px 0 0; font-size: var(--fs-xl); font-weight: 650; font-variant-numeric: tabular-nums;
+  letter-spacing: -0.015em; color: var(--text); white-space: nowrap;
+}
+.profile-cov { display: block; font-size: var(--fs-2xs); color: var(--text-faint); margin-top: 1px; }
+.lines-add, .lines-del { font-size: var(--fs-lg); }
+.lines-add { color: var(--success); }
+.lines-del { color: var(--text-dim); }
+.profile-block .eff-title { margin-bottom: var(--s2); }
+.mixbar { display: flex; height: 10px; gap: 2px; border-radius: var(--r-full); overflow: hidden; }
+.mixbar > span { display: block; min-width: 3px; flex-basis: 0; }
+.mix-legend {
+  list-style: none; margin: var(--s2) 0 0; padding: 0; display: flex; flex-wrap: wrap; gap: 4px var(--s4);
+  font-size: var(--fs-sm); color: var(--text-dim);
+}
+.mix-legend li { display: inline-flex; align-items: center; min-width: 0; }
+.mix-name { font-family: var(--mono); font-size: var(--fs-xs); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 22ch; }
+.mix-val { margin-left: 6px; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+
+/* ---- files panel ---- */
+.files-list .bar-label { direction: ltr; }
+
+/* ---- page rows ---- */
+.bento.trends-row { margin-bottom: var(--s4); }
+.bento + .bento.trends-row { margin-top: var(--s4); }
+
+/* Sparkline inside a numeric cell: line on the left, the number right-aligned as before. */
+.num-spark { display: inline-flex; align-items: center; justify-content: flex-end; gap: var(--s2); }
+.num-spark .spark { flex-shrink: 0; }
+.trend-table .data-table td:first-child { min-width: 10ch; }

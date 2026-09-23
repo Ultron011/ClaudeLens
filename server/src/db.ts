@@ -10,6 +10,9 @@ export const pool = new pg.Pool({
   connectionTimeoutMillis: 5000,
   statement_timeout: 20000,
   idle_in_transaction_session_timeout: 30000,
+  // JIT added ~1 s to every query that expands stats jsonb (the planner guesses 100 rows per
+  // jsonb_each and decides compilation pays off); these queries run in tens of ms without it.
+  options: '-c jit=off',
 });
 // An idle client's error (e.g. DB container restart) is emitted on the pool; unhandled, it
 // crashes the process. The pool discards the broken client on its own.

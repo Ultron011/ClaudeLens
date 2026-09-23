@@ -133,6 +133,33 @@ sessions, turns, messages, tokens, cost, lastActivity, skills[] }], skills: [{ s
 `project` is `(no project)` for NULL. Skills are aggregated in their own CTE — joining them
 per row would multiply every sum by the skill count. `author` is required (`400` otherwise).
 
+## `POST /api/sessions/curate` (plugin: `/claudelens:note`, `:feature`, `:tag`, `:link`)
+Token-gated like ingest (`Bearer <CLAUDELENS_TOKEN>`, checked before a 100kb body parse). Body
+`{ sessionId, author, note?: string|null, tags?: string[], featured?: boolean }`; the author goes
+through `canonicalAuthor()` (aliases + case-insensitive match). With no change fields it is a
+lookup. `200 { id, url, note?, tags, featured }`; `404` until the session's first sync has landed
+(the plugin then uploads it and retries once); `400` on bad input (note ≤2000 chars, tags as PATCH).
+The note is redacted server-side.
+
+## Insights — `GET /api/insights/{decisions,tools,agents}` (`server/src/insights.ts`)
+All take `identity`, `from`, `to`, `project` via `analyticsScope()`. Person key is the `author`
+string (several people share one account email). Results are cached per scope for 60 s in-process
+(≤64 entries, failures not cached) — new data can take up to a minute to appear.
+- **decisions** — every AskUserQuestion (parser v6+ rows; prefilter
+  `stats->'toolUsage' ? 'AskUserQuestion' AND parser_version >= 6`, not `search_tsv`, which only
+  indexes the first 400k chars). Extra params `q` (≤200 chars, over question/header/options/
+  answer/notes), `notes=true`, `limit` (1–100, default 30), `offset`. Returns `coverage
+  {calls, withData}`, `stats {…recommended/option/custom split…}`, `projects[]`, `total`,
+  `items[{ id, sessionId, title, author, label, project, turnIndex, timestamp, dismissed, denied,
+  questions[{…, picked[], custom?, pick}] }]`, `hasMore`. Deep link: `/session/<id>#t-<turnIndex>`
+  (0-based `WITH ORDINALITY`).
+- **tools** — per-tool uses/errors/failureRate/denials, MCP tools grouped by server
+  (`mcp__<server>__<tool>`), denial kinds, weekly failure-rate series (Monday UTC). Failure rates
+  divide only by calls from sessions that have `stats.toolErrors` (v7+); `coverage` says how many.
+- **agents** — subagent types (runs from transcript Agent/Task calls; a whitespace-containing
+  `detail` counts as `general-purpose`), people, tokens/cost from `subagentUsage` (v7+); skills
+  with uses/people/last used and a weekly series.
+
 ## `GET /api/stats`
 Aggregate stats for the org-wide leaderboard/value panel. No params, no filters (there is
 deliberately no `GET /api/users` or per-user variant of this route — see

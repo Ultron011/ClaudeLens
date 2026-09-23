@@ -7,7 +7,7 @@ sessions appear under on the dashboard.
 
 **Disclosure — tell the user this before or when you connect:** ClaudeLens
 also reads the email address of the Claude Code account you're signed in
-with (`~/.claude.json`) and sends it along with each synced session, to group
+with (`~/.claude.json`, or `$CLAUDE_CONFIG_DIR/.claude.json` under a profile) and sends it along with each synced session, to group
 your sessions by account on the dashboard. To opt out of sharing that email
 while still syncing transcripts, set `"shareAccount": false` in
 `~/.claude/claudelens.json`.

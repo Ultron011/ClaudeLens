@@ -200,6 +200,16 @@ function applyAnswers(tc, result, isError) {
     if (typeof n === "string" && n.trim()) q.notes = n.trim();
   }
 }
+function slashCommandsIn(text) {
+  return [...text.matchAll(COMMAND_NAME)].map((m) => m[1].startsWith("/") ? m[1] : `/${m[1]}`);
+}
+function relativeTo(path, cwd) {
+  const p = path.replace(/\\/g, "/");
+  if (!cwd) return p;
+  const root = cwd.replace(/\\/g, "/").replace(/\/+$/, "");
+  if (p === root) return ".";
+  return root && p.startsWith(root + "/") ? p.slice(root.length + 1) : p;
+}
 function basename(p) {
   if (!p) return void 0;
   const parts = p.replace(/\/+$/, "").split("/");
@@ -233,6 +243,20 @@ function parseTranscript(jsonl, opts = {}) {
   const models = /* @__PURE__ */ new Set();
   const modelUsage = {};
   const daily = {};
+  const fileTouches = /* @__PURE__ */ new Map();
+  const noteFile = (name, input) => {
+    const kind = FILE_TOOLS[name];
+    const path = input?.file_path ?? input?.notebook_path;
+    if (!kind || typeof path !== "string" || !path.trim()) return;
+    let t = fileTouches.get(path);
+    if (!t) fileTouches.set(path, t = { reads: 0, edits: 0, writes: 0 });
+    t[kind] += 1;
+  };
+  const gitBranches = [];
+  const slashCommands = {};
+  const noteSlash = (text) => {
+    for (const c of slashCommandsIn(text)) slashCommands[c] = (slashCommands[c] ?? 0) + 1;
+  };
   const callsById = /* @__PURE__ */ new Map();
   const agentTypeById = /* @__PURE__ */ new Map();
   const seenUsage = /* @__PURE__ */ new Set();
@@ -305,7 +329,8 @@ function parseTranscript(jsonl, opts = {}) {
   const pushUserTurn = (e, text, toolCalls = []) => {
     const day = e.timestamp?.slice(0, 10);
     if (day) ensureDay(day).turns += 1;
-    if (isGenuineHumanTurn(e)) {
+    const genuine = isGenuineHumanTurn(e);
+    if (genuine) {
       userMessages += 1;
       if (day) ensureDay(day).userMessages += 1;
     }
@@ -315,13 +340,15 @@ function parseTranscript(jsonl, opts = {}) {
       text,
       toolCalls,
       isSidechain: e.isSidechain,
-      permissionMode: currentMode
+      permissionMode: currentMode,
+      ...genuine ? {} : { injected: true }
     });
   };
   for (const [index, e] of entries.entries()) {
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
     if (e.gitBranch && !gitBranch) gitBranch = e.gitBranch;
+    if (e.gitBranch && !gitBranches.includes(e.gitBranch)) gitBranches.push(e.gitBranch);
     if (e.version && !version) version = e.version;
     if (e.type === "ai-title" && e.aiTitle) title = e.aiTitle;
     if (e.type === "permission-mode") {
@@ -331,6 +358,7 @@ function parseTranscript(jsonl, opts = {}) {
     if (e.type === "system") {
       if (e.subtype === "turn_duration" && typeof e.durationMs === "number") addActive(e.durationMs);
       if (e.subtype === "compact_boundary") compactions++;
+      if (e.subtype === "local_command" && typeof e.content === "string" && !e.isSidechain) noteSlash(e.content);
       continue;
     }
     if (e.type === "cost-state") {
@@ -382,6 +410,7 @@ function parseTranscript(jsonl, opts = {}) {
       else if (b.type === "thinking" && b.thinking) thinkingParts.push(b.thinking);
       else if (b.type === "tool_use" && b.name) {
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        noteFile(b.name, b.input);
         const detail = toolDetail(b.name, b.input);
         if (b.name === "Skill" && detail) skills.add(detail);
         if ((b.name === "Task" || b.name === "Agent") && detail) {
@@ -406,6 +435,7 @@ function parseTranscript(jsonl, opts = {}) {
       }
     }
     const rawText = textParts.join("\n\n").trim();
+    if (e.type === "user" && !e.isSidechain && e.isMeta !== true) noteSlash(rawText);
     const text = e.type === "user" ? cleanUserText(rawText) : rawText;
     if (e.type === "user") {
       if (INTERRUPT.test(text)) {
@@ -466,6 +496,7 @@ ${th}` : th;
       for (const b of asBlocks(e.message.content)) {
         if (b.type !== "tool_use" || !b.name) continue;
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        noteFile(b.name, b.input);
         su.toolCalls += 1;
       }
     }
@@ -501,6 +532,19 @@ ${th}` : th;
     }
     reported.costUsd = Math.round(reported.costUsd * 1e4) / 1e4;
   }
+  let files;
+  if (fileTouches.size) {
+    files = {};
+    const total = (t) => t.reads + t.edits + t.writes;
+    const top = [...fileTouches].sort((a, b) => total(b[1]) - total(a[1])).slice(0, FILES_CAP);
+    for (const [path, t] of top) {
+      const key = redactText(relativeTo(path, cwd)).text;
+      const into = files[key] ??= { reads: 0, edits: 0, writes: 0 };
+      into.reads += t.reads;
+      into.edits += t.edits;
+      into.writes += t.writes;
+    }
+  }
   const stats = {
     turns: turns.length,
     userMessages,
@@ -529,7 +573,10 @@ ${th}` : th;
     compactions,
     apiErrors,
     rateLimitHits,
-    reported
+    reported,
+    files,
+    gitBranches,
+    slashCommands
   };
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;
   return {
@@ -546,13 +593,13 @@ ${th}` : th;
     parserVersion: PARSER_VERSION
   };
 }
-var PARSER_VERSION, ARG_CAP, ARG_FIELDS, NEVER, INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT, SKILL_BODY_PREFIX, INTERRUPT, LIMIT_NOTICE, isSynthetic;
+var PARSER_VERSION, ARG_CAP, ARG_FIELDS, NEVER, INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT, SKILL_BODY_PREFIX, COMMAND_NAME, FILE_TOOLS, FILES_CAP, INTERRUPT, LIMIT_NOTICE, isSynthetic;
 var init_parser = __esm({
   "../shared/src/parser.ts"() {
     "use strict";
     init_pricing();
     init_redact();
-    PARSER_VERSION = 8;
+    PARSER_VERSION = 9;
     ARG_CAP = 4e3;
     ARG_FIELDS = {
       Bash: ["command"],
@@ -580,6 +627,15 @@ var init_parser = __esm({
     INJECTED_TAG = new RegExp(`</?${INJECTED_TAG_NAME}\\b[^>]*>`, "g");
     CAVEAT = /Caveat:\s*The messages below were generated by the user while running local commands\.[\s\S]*?(?:\n\n|$)/g;
     SKILL_BODY_PREFIX = /^Base directory for this skill:\s*\S+/;
+    COMMAND_NAME = /<command-name>\s*([^<\s]+)\s*<\/command-name>/g;
+    FILE_TOOLS = {
+      Read: "reads",
+      Edit: "edits",
+      MultiEdit: "edits",
+      NotebookEdit: "edits",
+      Write: "writes"
+    };
+    FILES_CAP = 200;
     INTERRUPT = /^\[Request interrupted by user/;
     LIMIT_NOTICE = /\b(session|weekly|usage) limit\b/i;
     isSynthetic = (e, model) => model === "<synthetic>" || e.isApiErrorMessage === true;
@@ -598,10 +654,16 @@ var init_src = __esm({
 });
 
 // src/config.ts
-import { readFile, writeFile, rename } from "node:fs/promises";
+import { readFile, writeFile, rename, mkdir } from "node:fs/promises";
 import { homedir, userInfo } from "node:os";
 import { execFileSync } from "node:child_process";
 import { join, resolve, sep, dirname, parse as parsePath } from "node:path";
+function claudeConfigDir() {
+  return process.env.CLAUDE_CONFIG_DIR?.trim() || join(homedir(), ".claude");
+}
+function projectsDir() {
+  return join(claudeConfigDir(), "projects");
+}
 function migrateBackfilled(parsed) {
   if (parsed.backfilled) return parsed.backfilled;
   if (parsed.backfilledSessions) return Object.fromEntries(parsed.backfilledSessions.map((id) => [id, 0]));
@@ -628,7 +690,10 @@ function normalize(parsed) {
     redact: parsed.redact ?? true,
     backfilled: migrateBackfilled(parsed),
     backfilledMtime: parsed.backfilledMtime ?? {},
-    shareAccount: parsed.shareAccount
+    shareAccount: parsed.shareAccount,
+    lastSyncAt: parsed.lastSyncAt,
+    lastSyncOk: parsed.lastSyncOk,
+    lastSyncError: parsed.lastSyncError
   };
 }
 async function loadConfig() {
@@ -648,6 +713,7 @@ async function updateConfig(mutate) {
   mutate(cfg);
   const { backfilledSessions: _legacy, ...rest } = raw;
   const tmp = `${CONFIG_PATH}.${process.pid}.tmp`;
+  await mkdir(dirname(CONFIG_PATH), { recursive: true });
   await writeFile(tmp, JSON.stringify({ ...rest, ...cfg }, null, 2) + "\n", "utf8");
   await rename(tmp, CONFIG_PATH);
   return cfg;
@@ -660,6 +726,22 @@ async function recordSynced(done) {
       if (mtime !== void 0) cfg.backfilledMtime[id] = Math.max(cfg.backfilledMtime[id] ?? 0, mtime);
     }
   });
+}
+function describeError(err) {
+  if (!(err instanceof Error)) return String(err);
+  const cause = err.cause;
+  const detail = cause?.code ?? cause?.message;
+  return detail && !err.message.includes(detail) ? `${err.message} (${detail})` : err.message;
+}
+async function recordSyncAttempt(ok, error) {
+  try {
+    await updateConfig((cfg) => {
+      cfg.lastSyncAt = (/* @__PURE__ */ new Date()).toISOString();
+      cfg.lastSyncOk = ok;
+      cfg.lastSyncError = ok ? void 0 : error?.slice(0, 300);
+    });
+  } catch {
+  }
 }
 function isConnected(cfg) {
   return Boolean(cfg.server);
@@ -753,13 +835,13 @@ var init_config = __esm({
 import { readFile as readFile2 } from "node:fs/promises";
 import { homedir as homedir2 } from "node:os";
 import { join as join2 } from "node:path";
-function configPath() {
-  return join2(process.env.CLAUDE_CONFIG_DIR || homedir2(), ".claude.json");
+function accountPath() {
+  return join2(process.env.CLAUDE_CONFIG_DIR?.trim() || homedir2(), ".claude.json");
 }
 async function readAccount() {
   if (hasCached) return cached;
   try {
-    const raw = await readFile2(configPath(), "utf8");
+    const raw = await readFile2(accountPath(), "utf8");
     const parsed = JSON.parse(raw);
     const acc = parsed.oauthAccount;
     if (!acc || typeof acc !== "object") return void 0;
@@ -867,9 +949,11 @@ var init_upload = __esm({
 // src/sync.ts
 var sync_exports = {};
 __export(sync_exports, {
+  TOMBSTONED: () => TOMBSTONED,
   isDetached: () => isDetached,
   runSync: () => runSync,
-  spawnDetached: () => spawnDetached
+  spawnDetached: () => spawnDetached,
+  uploadAndRecord: () => uploadAndRecord
 });
 import { spawn } from "node:child_process";
 import { readFile as readFile4, stat } from "node:fs/promises";
@@ -943,12 +1027,22 @@ async function syncNow(transcriptPath, cwd, sessionId, inline) {
       c.backfilled[id] ??= 0;
     });
   }
-  const account = cfg.shareAccount === false ? void 0 : await readAccount();
-  if (await uploadSession(session, cfg, resolveName(cfg, account), account)) {
-    await recordSynced({ [id]: { version: PARSER_VERSION, mtime } });
-  }
+  await uploadAndRecord(session, cfg, mtime);
 }
-var PAYLOAD_ENV, isDetached, sleep;
+async function uploadAndRecord(session, cfg, mtime) {
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  let accepted;
+  try {
+    accepted = await uploadSession(session, cfg, resolveName(cfg, account), account);
+  } catch (err) {
+    await recordSyncAttempt(false, describeError(err));
+    throw err;
+  }
+  await recordSyncAttempt(accepted, accepted ? void 0 : TOMBSTONED);
+  if (accepted) await recordSynced({ [session.sessionId]: { version: PARSER_VERSION, mtime } });
+  return accepted;
+}
+var PAYLOAD_ENV, isDetached, sleep, TOMBSTONED;
 var init_sync = __esm({
   "src/sync.ts"() {
     "use strict";
@@ -959,6 +1053,7 @@ var init_sync = __esm({
     PAYLOAD_ENV = "CLAUDELENS_HOOK_PAYLOAD";
     isDetached = () => process.argv.includes("--detached");
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    TOMBSTONED = "server ignored it: deleted on the dashboard, so now untracked locally";
   }
 });
 
@@ -974,7 +1069,6 @@ __export(history_exports, {
   runSyncHistory: () => runSyncHistory
 });
 import { readdir as readdir2, readFile as readFile5, stat as stat2 } from "node:fs/promises";
-import { homedir as homedir3 } from "node:os";
 import { basename as basename2, join as join4, resolve as resolve2 } from "node:path";
 async function jsonlFiles(dir) {
   try {
@@ -1049,7 +1143,7 @@ async function runListProjects() {
   }
   const entries = await listProjects();
   if (!entries.length) {
-    console.log("No project history found under ~/.claude/projects.");
+    console.log(`No project history found under ${PROJECTS_DIR}.`);
     return;
   }
   console.log(JSON.stringify(entries, null, 2));
@@ -1092,6 +1186,7 @@ async function backfillOne(path, cfg, author, account, force, result, done) {
       result.skipped++;
       return;
     }
+    result.attempted = (result.attempted ?? 0) + 1;
     if (!await uploadSession(session, cfg, author, account)) {
       result.skipped++;
       return;
@@ -1101,6 +1196,7 @@ async function backfillOne(path, cfg, author, account, force, result, done) {
     result.synced++;
   } catch (err) {
     result.failed++;
+    result.lastError = describeError(err);
     if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
   }
 }
@@ -1115,8 +1211,14 @@ async function uploadFiles(files, cfg, opts, result) {
       await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result, done);
     }
   };
+  const failedBefore = result.failed;
+  const attemptedBefore = result.attempted ?? 0;
   await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
   await recordSynced(done);
+  if ((result.attempted ?? 0) > attemptedBefore || result.failed > failedBefore) {
+    const failed = result.failed - failedBefore;
+    await recordSyncAttempt(failed === 0, failed ? `${failed} of ${files.length} failed: ${result.lastError}` : void 0);
+  }
 }
 async function backfillDirs(dirs, opts = {}) {
   const result = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
@@ -1199,7 +1301,7 @@ var init_history = __esm({
     init_account();
     init_upload();
     init_sync();
-    PROJECTS_DIR = join4(homedir3(), ".claude", "projects");
+    PROJECTS_DIR = projectsDir();
     CATCHUP_CAP = 25;
   }
 });
@@ -1267,6 +1369,7 @@ var init_connect = __esm({
 // src/optout.ts
 var optout_exports = {};
 __export(optout_exports, {
+  resolveSessionId: () => resolveSessionId,
   runPause: () => runPause,
   runResume: () => runResume,
   runTrackProject: () => runTrackProject,
@@ -1275,7 +1378,7 @@ __export(optout_exports, {
   runUntrackSession: () => runUntrackSession
 });
 import { readdir as readdir3, readFile as readFile6, writeFile as writeFile2, unlink, stat as stat3 } from "node:fs/promises";
-import { homedir as homedir4 } from "node:os";
+import { homedir as homedir3 } from "node:os";
 import { join as join5, resolve as resolve4 } from "node:path";
 function argFlag(name) {
   return process.argv.slice(3).includes(name);
@@ -1405,10 +1508,187 @@ var init_optout = __esm({
     "use strict";
     init_config();
     init_history();
-    PROJECTS_DIR2 = join5(homedir4(), ".claude", "projects");
-    pretty = (d) => d.replace(homedir4(), "~");
+    PROJECTS_DIR2 = projectsDir();
+    pretty = (d) => d.replace(homedir3(), "~");
     runPause = () => setPaused(true);
     runResume = () => setPaused(false);
+  }
+});
+
+// src/curate.ts
+var curate_exports = {};
+__export(curate_exports, {
+  runCurate: () => runCurate
+});
+import { readdir as readdir4, stat as stat4 } from "node:fs/promises";
+import { join as join6 } from "node:path";
+function parseArgs(argv) {
+  const out = { flags: /* @__PURE__ */ new Set(), rest: [] };
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === "--session") out.session = argv[++i];
+    else if (FLAGS.has(a)) out.flags.add(a);
+    else out.rest.push(a);
+  }
+  return out;
+}
+async function readStdin2() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+async function postCurate(cfg, body) {
+  const res = await fetch(`${cfg.server}/api/sessions/curate`, {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
+    },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(TIMEOUT_MS)
+  });
+  return { status: res.status, reply: await res.json().catch(() => void 0) };
+}
+async function exclusionReason(cwd, id, cfg) {
+  if (cfg.ignoreSessions.includes(id)) return "you ran /claudelens:untrack \u2014 /claudelens:track includes it again";
+  if (isExcludedLocally(cwd, cfg)) return "this project is excluded \u2014 /claudelens:track-project includes it again";
+  if (await isRepoExcluded(cwd)) return "this repo is excluded team-wide by a committed .claudelens file";
+  if (envOptedOut()) return "DO_NOT_TRACK / CLAUDELENS_DISABLE is set";
+  return void 0;
+}
+async function findTranscript(id) {
+  const root = projectsDir();
+  let dirs;
+  try {
+    dirs = await readdir4(root);
+  } catch {
+    return void 0;
+  }
+  for (const d of dirs) {
+    const path = join6(root, d, `${id}.jsonl`);
+    try {
+      if ((await stat4(path)).isFile()) return path;
+    } catch {
+    }
+  }
+  return void 0;
+}
+async function syncCurrent(id, cwd, cfg) {
+  const path = await findTranscript(id);
+  if (!path) return `couldn't find this session's transcript under ${projectsDir()}`;
+  const { mtimeMs } = await stat4(path);
+  const session = await parseSessionFile(path);
+  if (!session.sessionId || session.stats.turns < 1) return "the transcript has nothing to sync yet";
+  if (!await shouldSync(session.cwd ?? cwd, session.sessionId, cfg)) return "this session is excluded from syncing";
+  try {
+    if (!await uploadAndRecord(session, cfg, mtimeMs)) return "it was deleted on the dashboard, so it is untracked now";
+  } catch (err) {
+    return `upload failed (${describeError(err)})`;
+  }
+  return void 0;
+}
+function parseTags(rest) {
+  const tags = rest.flatMap((a) => a.split(/[\s,]+/)).map((t) => t.replace(/^#/, "").trim()).filter(Boolean);
+  return [...new Set(tags)];
+}
+async function runCurate(op2) {
+  const cfg = await loadConfig();
+  if (!isConnected(cfg)) {
+    console.log("ClaudeLens is not connected. Run /claudelens:connect <server-url> <token> <your name> first.");
+    return;
+  }
+  const args = parseArgs(process.argv.slice(3));
+  const cwd = process.cwd();
+  const id = await resolveSessionId(args.session, cwd);
+  if (!id) {
+    console.log("Could not identify this session yet (no transcript). Try again after your first message.");
+    return;
+  }
+  const excluded = await exclusionReason(cwd, id, cfg);
+  if (excluded) {
+    console.log(`This session isn't tracked by ClaudeLens (${excluded}). Nothing was sent.`);
+    return;
+  }
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  const body = { sessionId: id, author: resolveName(cfg, account) };
+  if (op2 === "note") {
+    const text = (args.flags.has("--stdin") ? await readStdin2() : args.rest.join(" ")).trim();
+    if (args.flags.has("--clear") || text === "--clear") body.note = null;
+    else if (!text) {
+      console.log("Usage: /claudelens:note <why this session is worth reading>   (or --clear to remove it)");
+      return;
+    } else body.note = cfg.redact ? redactText(text).text : text;
+  } else if (op2 === "feature") {
+    body.featured = !args.flags.has("--off");
+  } else if (op2 === "tag") {
+    if (args.flags.has("--clear")) body.tags = [];
+    else {
+      const tags2 = parseTags(args.rest);
+      if (tags2.length) body.tags = tags2;
+    }
+  }
+  let res;
+  try {
+    res = await postCurate(cfg, body);
+    if (res.status === 404) {
+      if (cfg.paused) {
+        console.log("This session isn't on the dashboard yet, and syncing is paused (/claudelens:resume). Nothing was sent.");
+        return;
+      }
+      const why = await syncCurrent(id, cwd, cfg);
+      if (why) {
+        console.log(`This session isn't on the dashboard yet, and syncing it failed: ${why}.`);
+        return;
+      }
+      res = await postCurate(cfg, body);
+    }
+  } catch (err) {
+    console.log(`\u2716 Couldn't reach ${cfg.server}: ${describeError(err)}`);
+    return;
+  }
+  const { status, reply } = res;
+  if (status === 404) {
+    console.log("This session still isn't on the dashboard \u2014 try again after Claude's next reply.");
+    return;
+  }
+  if (status === 401 || status === 403) {
+    console.log(`\u2716 The server rejected the token (HTTP ${status}). Re-run /claudelens:connect with the current token.`);
+    return;
+  }
+  if (status < 200 || status >= 300 || !reply) {
+    console.log(`\u2716 Server error (HTTP ${status})${reply?.error ? `: ${reply.error}` : ""}`);
+    return;
+  }
+  const url = `${cfg.server}${reply.url ?? `/session/${reply.id}`}`;
+  const tags = reply.tags ?? [];
+  switch (op2) {
+    case "note":
+      console.log(body.note === null ? `\u2714 Note cleared \u2014 ${url}` : `\u2714 Note saved \u2014 ${url}`);
+      break;
+    case "feature":
+      console.log(reply.featured ? `\u2605 Featured on the dashboard \u2014 ${url}` : `\u2714 No longer featured \u2014 ${url}`);
+      break;
+    case "tag":
+      if (body.tags) console.log(tags.length ? `\u2714 Tags: ${tags.join(", ")} \u2014 ${url}` : `\u2714 Tags cleared \u2014 ${url}`);
+      else console.log(`${tags.length ? `Tags: ${tags.join(", ")}` : "No tags yet"} \u2014 ${url}  (set with /claudelens:tag <tag> \u2026)`);
+      break;
+    case "link":
+      console.log(url);
+      break;
+  }
+}
+var TIMEOUT_MS, FLAGS;
+var init_curate = __esm({
+  "src/curate.ts"() {
+    "use strict";
+    init_src();
+    init_config();
+    init_account();
+    init_optout();
+    init_upload();
+    init_sync();
+    TIMEOUT_MS = 15e3;
+    FLAGS = /* @__PURE__ */ new Set(["--stdin", "--clear", "--off"]);
   }
 });
 
@@ -1417,13 +1697,40 @@ var status_exports = {};
 __export(status_exports, {
   runStatus: () => runStatus
 });
-import { resolve as resolve5 } from "node:path";
-import { homedir as homedir5 } from "node:os";
+import { readFileSync } from "node:fs";
+import { dirname as dirname2, join as join7, resolve as resolve5 } from "node:path";
+import { homedir as homedir4 } from "node:os";
+function pluginRoot() {
+  const a = process.argv.slice(3);
+  const i = a.indexOf("--root");
+  const v = i >= 0 ? a[i + 1] : void 0;
+  if (v && !v.includes("$") && !v.includes("{")) return v;
+  return process.env.CLAUDE_PLUGIN_ROOT || dirname2(dirname2(resolve5(process.argv[1])));
+}
+function pluginVersion(root) {
+  try {
+    return JSON.parse(readFileSync(join7(root, ".claude-plugin", "plugin.json"), "utf8")).version ?? "?";
+  } catch {
+    return "unknown";
+  }
+}
+function ago(iso) {
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1e3));
+  if (s < 90) return `${s}s ago`;
+  if (s < 90 * 60) return `${Math.round(s / 60)}m ago`;
+  if (s < 36 * 3600) return `${Math.round(s / 3600)}h ago`;
+  return `${Math.round(s / 86400)}d ago`;
+}
 async function runStatus() {
   const cfg = await loadConfig();
   const cwd = process.cwd();
+  const root = pluginRoot();
+  const profile = `${tilde(claudeConfigDir())}${process.env.CLAUDE_CONFIG_DIR?.trim() ? " (CLAUDE_CONFIG_DIR)" : " (default)"}`;
+  const plugin = `v${pluginVersion(root)} \xB7 ${tilde(root)}`;
   if (!isConnected(cfg)) {
     console.log("ClaudeLens is not connected yet.");
+    console.log(`  Claude    ${profile}`);
+    console.log(`  Plugin    ${plugin}`);
     console.log("Run  /claudelens:connect <server-url> <token>  once to turn tracking on.");
     return;
   }
@@ -1434,23 +1741,29 @@ async function runStatus() {
   const account = cfg.shareAccount === false ? void 0 : await readAccount();
   console.log("ClaudeLens");
   console.log(`  Server    ${cfg.server}`);
+  console.log(`  Claude    ${profile}`);
+  console.log(`  Plugin    ${plugin}`);
+  console.log(`  Config    ${tilde(CONFIG_PATH)} (shared by every Claude profile)`);
   console.log(`  Author    ${resolveName(cfg, account)}`);
   if (account) {
     console.log(`  Account   ${account.email ?? "(no email)"}${account.organizationName ? ` \xB7 ${account.organizationName}` : ""}`);
   } else if (cfg.shareAccount === false) {
     console.log("  Account   not shared (shareAccount: false)");
   } else {
-    console.log("  Account   unavailable (could not read ~/.claude.json)");
+    console.log(`  Account   unavailable (could not read ${tilde(accountPath())})`);
   }
   console.log(`  Parser    v${PARSER_VERSION} (local)`);
-  console.log(`  Global    ${cfg.paused ? "PAUSED" : envOptedOut() ? "disabled by env (DO_NOT_TRACK)" : "on"}`);
-  console.log(`  This dir  ${cwd.replace(homedir5(), "~")}`);
+  console.log(`  Global    ${cfg.paused ? "PAUSED (/claudelens:resume to turn back on)" : envOptedOut() ? "disabled by env (DO_NOT_TRACK)" : "on"}`);
+  console.log(
+    `  Last sync ${cfg.lastSyncAt ? `${new Date(cfg.lastSyncAt).toISOString().replace("T", " ").slice(0, 19)} UTC (${ago(cfg.lastSyncAt)}) \u2014 ${cfg.lastSyncOk ? "ok" : `FAILED: ${cfg.lastSyncError ?? "unknown error"}`}` : "none recorded yet (tracked since plugin 0.8.0)"}`
+  );
+  console.log(`  This dir  ${tilde(cwd)}`);
   console.log(
     `            ${trackingHere ? "tracked \u2713" : repoOff ? "excluded by committed .claudelens (team-wide)" : projOff ? "excluded (you ran /claudelens:untrack-project)" : "not tracked (global pause/opt-out)"}`
   );
   if (cfg.ignoreProjects.length) {
     console.log(`  Excluded projects (${cfg.ignoreProjects.length}):`);
-    for (const p of cfg.ignoreProjects) console.log(`    \xB7 ${resolve5(p).replace(homedir5(), "~")}`);
+    for (const p of cfg.ignoreProjects) console.log(`    \xB7 ${tilde(resolve5(p))}`);
   }
   if (cfg.ignoreSessions.length) {
     console.log(`  Excluded sessions: ${cfg.ignoreSessions.length}`);
@@ -1462,12 +1775,14 @@ async function runStatus() {
     console.log("  Health    unreachable");
   }
 }
+var tilde;
 var init_status = __esm({
   "src/status.ts"() {
     "use strict";
     init_src();
     init_config();
     init_account();
+    tilde = (p) => p.replace(homedir4(), "~");
   }
 });
 
@@ -1479,8 +1794,7 @@ __export(update_exports, {
 import { readFile as readFile7, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
-import { homedir as homedir6 } from "node:os";
-import { join as join6, resolve as resolve6 } from "node:path";
+import { join as join8, resolve as resolve6 } from "node:path";
 function git(args, cwd) {
   return spawnSync("git", args, { cwd, stdio: "inherit" }).status === 0;
 }
@@ -1493,16 +1807,16 @@ function runningRoot() {
 }
 async function findMarketplace() {
   try {
-    const raw = await readFile7(join6(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
+    const raw = await readFile7(join8(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
     const reg = JSON.parse(raw);
     for (const entry of Object.values(reg)) {
       const loc = entry.installLocation;
-      if (loc && existsSync(join6(loc, ".git")) && existsSync(join6(loc, "plugin", MARKER))) return loc;
+      if (loc && existsSync(join8(loc, ".git")) && existsSync(join8(loc, "plugin", MARKER))) return loc;
     }
   } catch {
   }
-  const guess = join6(PLUGINS_DIR, "marketplaces", "claudelens");
-  if (existsSync(join6(guess, ".git")) && existsSync(join6(guess, "plugin", MARKER))) return guess;
+  const guess = join8(PLUGINS_DIR, "marketplaces", "claudelens");
+  if (existsSync(join8(guess, ".git")) && existsSync(join8(guess, "plugin", MARKER))) return guess;
   return void 0;
 }
 async function runUpdate() {
@@ -1517,7 +1831,7 @@ async function runUpdate() {
     console.log("git pull failed \u2014 resolve it in that checkout, then retry.");
     return;
   }
-  const src = join6(mp, "plugin");
+  const src = join8(mp, "plugin");
   const root = runningRoot();
   if (!root || !existsSync(root)) {
     console.log("\u2714 Latest fetched. Activate it with  /plugin  \u2192  update  (or restart Claude Code).");
@@ -1528,8 +1842,8 @@ async function runUpdate() {
     return;
   }
   for (const part of ["dist", "skills", "hooks", ".claude-plugin"]) {
-    const from = join6(src, part);
-    if (existsSync(from)) await cp(from, join6(root, part), { recursive: true, force: true });
+    const from = join8(src, part);
+    if (existsSync(from)) await cp(from, join8(root, part), { recursive: true, force: true });
   }
   console.log("\u2714 Updated \u2014 new code runs from the next turn.");
   console.log("(If an update adds/removes slash commands, run /plugin \u2192 update too so the menu refreshes.)");
@@ -1538,8 +1852,9 @@ var PLUGINS_DIR, MARKER;
 var init_update = __esm({
   "src/update.ts"() {
     "use strict";
-    PLUGINS_DIR = join6(homedir6(), ".claude", "plugins");
-    MARKER = join6("dist", "claudelens.mjs");
+    init_config();
+    PLUGINS_DIR = join8(claudeConfigDir(), "plugins");
+    MARKER = join8("dist", "claudelens.mjs");
   }
 });
 
@@ -1565,6 +1880,14 @@ async function main() {
       return (await Promise.resolve().then(() => (init_optout(), optout_exports))).runPause();
     case "resume":
       return (await Promise.resolve().then(() => (init_optout(), optout_exports))).runResume();
+    case "note":
+    // /claudelens:note
+    case "feature":
+    // /claudelens:feature
+    case "tag":
+    // /claudelens:tag
+    case "link":
+      return (await Promise.resolve().then(() => (init_curate(), curate_exports))).runCurate(op);
     case "status":
       return (await Promise.resolve().then(() => (init_status(), status_exports))).runStatus();
     case "update":

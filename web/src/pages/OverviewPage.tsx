@@ -14,6 +14,10 @@ import { useDateRange, useLayoutPref } from '../usePref.js';
 import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels } from '../charts/palette.js';
+import { getSparklines, type Sparklines } from '../api.trends.js';
+import { DeltaBadge, periodLabel } from '../components/trends/DeltaBadge.js';
+import { Sparkline } from '../components/trends/Sparkline.js';
+import { CalendarPanel, HourHeatmapPanel, useActivity, useCompare } from '../components/trends/ActivityPanels.js';
 
 export function OverviewPage() {
   // Org stats come from the layout route — mounted once, shared with the rail.
@@ -38,6 +42,19 @@ export function OverviewPage() {
   // KPIs follow the range picker like the charts beside them. They used to be all-time totals
   // under a range picker, which read as "this period".
   const tot = series?.totals;
+
+  // Trends: period-over-period deltas, the team heatmaps, per-person sparklines (one request).
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+  const { data: cmp } = useCompare({ from: fromIso, to: toIso });
+  const activity = useActivity({ from: fromIso, to: toIso });
+  const { data: sparks } = useFetch<Sparklines>(
+    (signal) => getSparklines({ by: 'author', from: fromIso, to: toIso }, signal),
+    [fromIso, toIso],
+  );
+  const vs = periodLabel(from, to);
+  const delta = (k: 'sessions' | 'userMessages' | 'cost' | 'people') =>
+    cmp ? <DeltaBadge current={cmp.current[k]} previous={cmp.previous[k]} label={vs} /> : null;
 
   if (err) {
     return (
@@ -86,26 +103,53 @@ export function OverviewPage() {
               label="Sessions"
               icon="message"
               value={tot.sessions.toLocaleString()}
-              foot={`${stats.totals.sessions.toLocaleString()} all time`}
+              foot={
+                <>
+                  {delta('sessions')}
+                  <span className="kpi-foot-rest">{`${stats.totals.sessions.toLocaleString()} all time`}</span>
+                </>
+              }
               primary
             />
             <Kpi
               label="People"
               icon="people"
               value={String(stats.totals.authors)}
-              foot={`all time · ${stats.authors.reduce((n, a) => n + a.projects, 0)} projects between them`}
+              foot={
+                cmp ? (
+                  <>
+                    <span title="People with at least one session in the selected range">
+                      {cmp.current.people} active
+                    </span>{' '}
+                    {delta('people')}
+                    <span className="kpi-foot-rest">{`${stats.authors.reduce((n, a) => n + a.projects, 0)} projects all time`}</span>
+                  </>
+                ) : (
+                  `all time · ${stats.authors.reduce((n, a) => n + a.projects, 0)} projects between them`
+                )
+              }
             />
             <Kpi
               label="Messages"
               icon="person"
               value={(tot.userMessages ?? 0).toLocaleString()}
-              foot={`${(tot.turns ?? 0).toLocaleString()} Claude turns back`}
+              foot={
+                <>
+                  {delta('userMessages')}
+                  <span className="kpi-foot-rest">{`${(tot.turns ?? 0).toLocaleString()} Claude turns`}</span>
+                </>
+              }
             />
             <Kpi
               label="Cost"
               icon="coin"
               value={fmtCost(tot.cost)}
-              foot={`${fmtTokens(tot.tokens ?? 0)} tokens · ${fmtCost(stats.totals.cost)} all time`}
+              foot={
+                <>
+                  {delta('cost')}
+                  <span className="kpi-foot-rest">{`${fmtTokens(tot.tokens ?? 0)} tokens · ${fmtCost(stats.totals.cost)} all time`}</span>
+                </>
+              }
             />
           </>
         )}
@@ -171,6 +215,9 @@ export function OverviewPage() {
           )}
         </section>
 
+        <HourHeatmapPanel state={activity} className="panel col-7" />
+        <CalendarPanel state={activity} className="panel col-5" />
+
         {/* People is not wrapped in a .panel: the table (and the card grid) already carries its
          * own bordered surface, and a bordered surface inside a bordered surface is a nested
          * card. The heading row sits above it instead. */}
@@ -202,11 +249,11 @@ export function OverviewPage() {
               </p>
             </div>
           ) : layout === 'table' ? (
-            <PeopleTable authors={stats.authors} />
+            <PeopleTable authors={stats.authors} sparks={sparks} />
           ) : (
             <div className="grid">
               {stats.authors.map((a) => (
-                <PersonCard key={a.author} a={a} />
+                <PersonCard key={a.author} a={a} sparks={sparks} />
               ))}
             </div>
           )}
@@ -257,7 +304,11 @@ export function OverviewPage() {
   );
 }
 
-function PersonCard({ a }: { a: AuthorSummary }) {
+function sparkFor(sparks: Sparklines | null, key: string): number[] {
+  return sparks?.series.find((s) => s.key === key)?.values ?? (sparks ? sparks.days.map(() => 0) : []);
+}
+
+function PersonCard({ a, sparks }: { a: AuthorSummary; sparks: Sparklines | null }) {
   return (
     <article className="card">
       <Link className="card-link" aria-label={a.label} to={`/u/${encodeURIComponent(a.author)}`} />
@@ -289,6 +340,11 @@ function PersonCard({ a }: { a: AuthorSummary }) {
           />
           <Stat label="cost" value={fmtCost(a.cost)} />
         </div>
+        {sparks && (
+          <div className="card-spark">
+            <Sparkline values={sparkFor(sparks, a.author)} days={sparks.days} width={240} height={28} label="Messages per day" />
+          </div>
+        )}
       </div>
     </article>
   );
@@ -296,7 +352,7 @@ function PersonCard({ a }: { a: AuthorSummary }) {
 
 // No delete column here — `DELETE /api/authors` doesn't exist, so there'd be nothing for a
 // per-row action to call.
-function PeopleTable({ authors }: { authors: AuthorSummary[] }) {
+function PeopleTable({ authors, sparks }: { authors: AuthorSummary[]; sparks: Sparklines | null }) {
   const columns: Column<AuthorSummary>[] = [
     {
       key: 'person',
@@ -349,9 +405,14 @@ function PeopleTable({ authors }: { authors: AuthorSummary[] }) {
       numeric: true,
       sortable: true,
       sortValue: (a) => a.userMessages ?? 0,
+      // The sparkline rides in the Messages cell (same measure, over the selected range) rather
+      // than a column of its own — a 7th column starved the name column in the col-8 track.
       render: (a) => (
-        <span title={`${a.turns?.toLocaleString() ?? 0} Claude turns`}>
-          {a.userMessages?.toLocaleString() ?? '—'}
+        <span className="num-spark">
+          {sparks && (
+            <Sparkline values={sparkFor(sparks, a.author)} days={sparks.days} width={48} height={18} label={`${a.label}: messages per day in range`} />
+          )}
+          <span title={`${a.turns?.toLocaleString() ?? 0} Claude turns (all time)`}>{a.userMessages?.toLocaleString() ?? '—'}</span>
         </span>
       ),
     },
@@ -365,7 +426,7 @@ function PeopleTable({ authors }: { authors: AuthorSummary[] }) {
     },
   ];
   return (
-    <DataTable columns={columns} rows={authors} rowKey={(a) => a.author} caption="People" ariaLabel="People" />
+    <DataTable columns={columns} rows={authors} rowKey={(a) => a.author} caption="People" ariaLabel="People" className="trend-table" />
   );
 }
 

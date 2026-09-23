@@ -382,3 +382,92 @@ test('cost-state: last line per run, summed across runs', () => {
   assert.deepEqual(stats.reported, { costUsd: 3.25, linesAdded: 15, linesRemoved: 2 });
   assert.equal(parseTranscript(line({})).stats.reported, undefined);
 });
+
+// ── parser v9: files / gitBranches / slashCommands ──
+
+const toolUse = (id: string, name: string, input: Record<string, unknown>, extra: Record<string, unknown> = {}) =>
+  JSON.stringify({
+    type: 'assistant', sessionId: 's', timestamp: '2026-07-09T10:00:05.000Z',
+    message: { id: `m-${id}`, role: 'assistant', model: 'claude-sonnet-4-5', content: [{ type: 'tool_use', id, name, input }] },
+    ...extra,
+  });
+
+test('files: per-path reads/edits/writes, cwd-relative, backslashes normalized, redacted', () => {
+  const jsonl = [
+    line({ cwd: '/home/dev/app' }),
+    toolUse('a', 'Read', { file_path: '/home/dev/app/src/index.ts' }),
+    toolUse('b', 'Edit', { file_path: '/home/dev/app/src/index.ts', old_string: 'x', new_string: 'y' }),
+    toolUse('c', 'MultiEdit', { file_path: '/home/dev/app/src/index.ts', edits: [] }),
+    toolUse('d', 'Write', { file_path: '/home/dev/app/README.md', content: 'hi' }),
+    toolUse('e', 'NotebookEdit', { notebook_path: '/home/dev/app/nb.ipynb' }),
+    toolUse('f', 'Read', { file_path: '/etc/hosts' }),
+    toolUse('g', 'Read', { file_path: 'C:\\Users\\dev\\notes.txt' }),
+    toolUse('h', 'Read', { file_path: '/tmp/API_KEY=abcdef123456' }),
+    toolUse('i', 'Bash', { command: 'cat /home/dev/app/x' }), // not a file tool
+  ].join('\n');
+  const { stats } = parseTranscript(jsonl);
+  assert.deepEqual(stats.files, {
+    'src/index.ts': { reads: 1, edits: 2, writes: 0 },
+    'README.md': { reads: 0, edits: 0, writes: 1 },
+    'nb.ipynb': { reads: 0, edits: 1, writes: 0 },
+    '/etc/hosts': { reads: 1, edits: 0, writes: 0 },
+    'C:/Users/dev/notes.txt': { reads: 1, edits: 0, writes: 0 },
+    '/tmp/API_KEY=«REDACTED»': { reads: 1, edits: 0, writes: 0 },
+  });
+  assert.equal(parseTranscript(line({})).stats.files, undefined);
+});
+
+test('files: a Windows cwd relativizes Windows paths; subagent file tools count too', () => {
+  const jsonl = [
+    line({ cwd: 'C:\\work\\repo' }),
+    toolUse('a', 'Edit', { file_path: 'C:\\work\\repo\\src\\a.ts' }),
+  ].join('\n');
+  const sub = toolUse('s1', 'Read', { file_path: 'C:\\work\\repo\\src\\a.ts' });
+  const { stats } = parseTranscript(jsonl, { subagents: [{ meta: { agentType: 'Explore' }, jsonl: sub }] });
+  assert.deepEqual(stats.files, { 'src/a.ts': { reads: 1, edits: 1, writes: 0 } });
+});
+
+test('files: capped at the 200 most-touched paths', () => {
+  const lines = [line({ cwd: '/r' })];
+  for (let i = 0; i < 250; i++) lines.push(toolUse(`r${i}`, 'Read', { file_path: `/r/f${i}.ts` }));
+  lines.push(toolUse('hot', 'Edit', { file_path: '/r/f249.ts' })); // last-seen but most-touched
+  const { stats } = parseTranscript(lines.join('\n'));
+  assert.equal(Object.keys(stats.files!).length, 200);
+  assert.deepEqual(stats.files!['f249.ts'], { reads: 1, edits: 1, writes: 0 });
+  assert.ok(stats.files!['f0.ts']);
+  assert.equal(stats.files!['f248.ts'], undefined);
+});
+
+test('gitBranches: every distinct branch, first-seen order', () => {
+  const jsonl = [
+    line({ gitBranch: 'main' }),
+    line({ gitBranch: 'feat/x' }),
+    line({ gitBranch: 'main' }),
+    line({ gitBranch: '' }),
+    line({ gitBranch: 'fix/y' }),
+  ].join('\n');
+  const { stats, gitBranch } = parseTranscript(jsonl);
+  assert.deepEqual(stats.gitBranches, ['main', 'feat/x', 'fix/y']);
+  assert.equal(gitBranch, 'main'); // the single first-seen field is unchanged
+});
+
+test('slashCommands: counted from <command-name> in user and local_command lines, before stripping', () => {
+  const cmd = (name: string) =>
+    `<command-name>${name}</command-name>\n            <command-message>${name.replace(/^\//, '')}</command-message>\n            <command-args></command-args>`;
+  const jsonl = [
+    line({ message: { role: 'user', content: cmd('/model') } }),
+    line({ message: { role: 'user', content: cmd('/model') } }),
+    line({ message: { role: 'user', content: [{ type: 'text', text: cmd('/claudelens:status') }] } }),
+    line({ message: { role: 'user', content: `<command-message>claudelens:note</command-message>\n<command-name>claudelens:note</command-name>` } }),
+    JSON.stringify({ type: 'system', subtype: 'local_command', content: cmd('/remote-control'), timestamp: '2026-07-09T10:00:00.000Z' }),
+    JSON.stringify({ type: 'system', subtype: 'local_command', content: '<local-command-stdout>done</local-command-stdout>' }),
+    // not typed by the human: meta lines, sidechains, and tool output that merely contains the tag
+    line({ isMeta: true, message: { role: 'user', content: cmd('/clear') } }),
+    line({ isSidechain: true, message: { role: 'user', content: cmd('/clear') } }),
+    line({ message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'x', content: cmd('/clear') }] } }),
+  ].join('\n');
+  const { stats, turns } = parseTranscript(jsonl);
+  assert.deepEqual(stats.slashCommands, { '/model': 2, '/claudelens:status': 1, '/claudelens:note': 1, '/remote-control': 1 });
+  // the wrapper is still stripped from the rendered transcript
+  assert.ok(turns.every((t) => !t.text.includes('command-name')));
+});

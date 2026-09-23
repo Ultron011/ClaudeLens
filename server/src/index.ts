@@ -6,6 +6,22 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { pool, SCHEMA, MIGRATIONS } from './db.js';
 import { redactDeep, redactText, type IngestPayload } from '@claudelens/shared';
+import {
+  UUID_RE,
+  BadRequest,
+  queryStrings,
+  dateParam,
+  sendError,
+  NO_PROJECT,
+  summaryRow,
+  IDENTITY_CLAUSE,
+  USER_MESSAGES_EXPR,
+  orderFor,
+  analyticsScope,
+  inTransaction,
+} from './helpers.js';
+import { registerInsights } from './insights.js';
+import { registerTrends } from './trends.js';
 
 const app = express();
 app.disable('x-powered-by');
@@ -80,90 +96,7 @@ const requireIngestToken: RequestHandler = (req, res, next) => {
 const smallJson = express.json({ limit: '100kb' });
 const ingestJson = express.json({ limit: '25mb' });
 
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-class BadRequest extends Error {}
-
-/** Query params as plain strings. `?a=1&a=2` / `?a[]=1` arrive as arrays or objects — reject them
- *  rather than letting a non-string reach SQL and surface as a 500. */
-function queryStrings(q: Record<string, unknown>): Record<string, string | undefined> {
-  const out: Record<string, string | undefined> = {};
-  for (const [k, v] of Object.entries(q)) {
-    if (v === undefined) continue;
-    if (typeof v !== 'string') throw new BadRequest(`query param "${k}" must be a single value`);
-    out[k] = v;
-  }
-  return out;
-}
-
-/** An ISO-ish date for from/to; Postgres would otherwise throw on garbage and we'd 500. */
-function dateParam(name: string, v: string | undefined): string | undefined {
-  if (!v) return undefined;
-  if (Number.isNaN(Date.parse(v))) throw new BadRequest(`"${name}" must be an ISO date`);
-  return v;
-}
-
-function sendError(res: express.Response, label: string, err: unknown) {
-  if (err instanceof BadRequest) return res.status(400).json({ error: err.message });
-  console.error(`${label} error:`, err);
-  res.status(500).json({ error: `${label} failed` });
-}
-
-/** The dashboard's "(no project)" group is a route-boundary sentinel for project IS NULL. */
-const NO_PROJECT = '(no project)';
-
 // --- helpers ---------------------------------------------------------------
-
-function summaryRow(r: any) {
-  const stats = {
-    ...r.stats,
-    permissionModes: r.stats?.permissionModes ?? [],
-    usedAutoMode: r.stats?.usedAutoMode ?? false,
-    modelUsage: r.stats?.modelUsage ?? {},
-    daily: r.stats?.daily ?? {},
-    // Legacy rows (parser_version 0-2) have `userTurns`, not `userMessages`. Without this
-    // fallback every old session would show 0 messages — worse than the inflated `turns`.
-    userMessages: r.stats?.userMessages ?? r.stats?.userTurns ?? 0,
-  };
-  return {
-    id: r.id,
-    sessionId: r.session_id,
-    title: r.title,
-    author: r.author,
-    project: r.project ?? undefined,
-    cwd: r.cwd ?? undefined,
-    gitBranch: r.git_branch ?? undefined,
-    note: r.note ?? undefined,
-    tags: r.tags ?? [],
-    featured: r.featured,
-    hidden: r.hidden,
-    stats,
-    startedAt: r.started_at ?? undefined,
-    endedAt: r.ended_at ?? undefined,
-    createdAt: r.created_at,
-    accountEmail: r.account_email ?? undefined,
-    displayName: r.account_display_name ?? undefined,
-    orgName: r.org_name ?? undefined,
-    usedAutoMode: r.used_auto_mode ?? undefined,
-    permissionModes: r.permission_modes ?? undefined,
-    parserVersion: r.parser_version ?? undefined,
-  };
-}
-
-// coalesce(account_email, author) = identity — old rows still group by author alone.
-//
-// The trailing `OR author = $n` is load-bearing, not redundant: `/api/stats` reports an author's
-// `identity` as their account *email* once one is known, but the UI routes people by display
-// name (`/u/:author`, `/analytics/u/:author`) because that's what reads in a URL and a crumb.
-// Without this branch, `?identity=Saurabh` matched zero rows the moment that person had an
-// account email, and the whole per-person analytics page rendered as zeros with no error.
-// Accepting either key keeps both the email and the display name working as a scope.
-const IDENTITY_CLAUSE = (n: number) =>
-  `(account_email = $${n} OR (account_email IS NULL AND author = $${n}) OR author = $${n})`;
-
-// Genuine human messages, with the userTurns fallback for parser_version 0-2 rows.
-const USER_MESSAGES_EXPR =
-  `coalesce((stats->>'userMessages')::int, (stats->>'userTurns')::int, 0)`;
 
 // --- routes ----------------------------------------------------------------
 
@@ -294,6 +227,66 @@ app.post('/api/sessions', requireIngestToken, ingestJson, async (req, res) => {
   }
 });
 
+// Curation from inside Claude Code (/claudelens:note, :feature, :link). Token-gated like ingest,
+// since the plugin has no dashboard login. Body: { sessionId, author, note?, tags?, featured? };
+// no fields = just look the session up. 404 until the session's first sync has landed.
+app.post('/api/sessions/curate', requireIngestToken, smallJson, async (req, res) => {
+  const { sessionId, author, note, tags, featured } = (req.body ?? {}) as {
+    sessionId?: unknown;
+    author?: unknown;
+    note?: unknown;
+    tags?: unknown;
+    featured?: unknown;
+  };
+  if (typeof sessionId !== 'string' || !sessionId || typeof author !== 'string' || !author) {
+    return res.status(400).json({ error: 'sessionId and author are required' });
+  }
+  const sets: string[] = [];
+  const args: unknown[] = [];
+  if (note !== undefined) {
+    if (note !== null && (typeof note !== 'string' || note.length > 2000)) {
+      return res.status(400).json({ error: 'note must be a string of ≤2000 chars (or null to clear)' });
+    }
+    args.push(typeof note === 'string' && note.trim() ? redactText(note.trim()).text : null);
+    sets.push(`note = $${args.length}`);
+  }
+  if (tags !== undefined) {
+    if (
+      !Array.isArray(tags) ||
+      tags.length > 20 ||
+      tags.some((t) => typeof t !== 'string' || !t.trim() || t.length > 50)
+    ) {
+      return res.status(400).json({ error: 'tags must be up to 20 non-empty strings of ≤50 chars' });
+    }
+    args.push([...new Set((tags as string[]).map((t) => t.trim()))]);
+    sets.push(`tags = $${args.length}`);
+  }
+  if (featured !== undefined) {
+    if (typeof featured !== 'boolean') return res.status(400).json({ error: 'featured must be a boolean' });
+    args.push(featured);
+    sets.push(`featured = $${args.length}`);
+  }
+  try {
+    const who = await canonicalAuthor(author);
+    args.push(sessionId, who);
+    const where = `session_id = $${args.length - 1} AND author = $${args.length}`;
+    const { rows } = sets.length
+      ? await pool.query(
+          `UPDATE sessions SET ${sets.join(', ')}, updated_at = now() WHERE ${where}
+           RETURNING id, note, tags, featured`,
+          args,
+        )
+      : await pool.query(`SELECT id, note, tags, featured FROM sessions WHERE ${where}`, args);
+    if (!rows.length) {
+      return res.status(404).json({ error: 'session not synced yet — try again after the next reply' });
+    }
+    const r = rows[0];
+    res.json({ id: r.id, url: `/session/${r.id}`, note: r.note ?? undefined, tags: r.tags, featured: r.featured });
+  } catch (err) {
+    sendError(res, 'curate', err);
+  }
+});
+
 // List / filter / search (no transcript body).
 app.get('/api/sessions', async (req, res) => {
   let where: string[] = [];
@@ -368,47 +361,6 @@ function buildListFilter(
   }
 
   return { where, orderBy: orderFor(sort) };
-}
-
-/** ORDER BY for a `sort` param: cost|turns|messages|tokens|recent|featured, `_asc` suffix flips.
- *  Only these literals are ever interpolated — the param itself never reaches SQL. */
-function orderFor(sort: string | undefined): string {
-  const DIR = (d: string) => (sort?.endsWith('_asc') ? d.replace('DESC', 'ASC') : d);
-  const key = sort?.replace(/_asc$/, '');
-  return (
-    key === 'cost'
-      ? DIR(`(stats->>'estimatedCostUsd')::float DESC NULLS LAST`)
-      : key === 'turns'
-        ? DIR(`(stats->>'turns')::int DESC NULLS LAST`)
-        : key === 'messages'
-          ? DIR(`${USER_MESSAGES_EXPR} DESC NULLS LAST`)
-          : key === 'tokens'
-            ? DIR(`(stats->>'totalTokens')::bigint DESC NULLS LAST`)
-            : key === 'featured'
-              ? 'featured DESC, started_at DESC NULLS LAST, created_at DESC'
-              : DIR('started_at DESC NULLS LAST') + ', created_at DESC');
-}
-
-// One-endpoint analytics: three queries over one filtered scope, run concurrently so the daily/
-// models/totals panels can never disagree. identity omitted = org-wide.
-/** Shared scope for the analytics endpoints: $1 identity, $2 from, $3 to, $4 project.
- *  Every param is referenced unconditionally (and cast, so Postgres can type it) even when null:
- *  a query text that never mentions a bound $n fails with "could not determine data type". */
-function analyticsScope(req: express.Request): { args: unknown[]; scopeWhere: string } {
-  const qs = queryStrings(req.query);
-  const project = qs.project;
-  const args: unknown[] = [
-    qs.identity ?? null,
-    dateParam('from', qs.from) ?? null,
-    dateParam('to', qs.to) ?? null,
-    project ?? null,
-  ];
-  const scopeWhere =
-    `hidden = false AND ($1::text IS NULL OR ${IDENTITY_CLAUSE(1)})` +
-    ` AND (started_at >= $2::timestamptz OR $2::timestamptz IS NULL)` +
-    ` AND (started_at < $3::timestamptz OR $3::timestamptz IS NULL)` +
-    ` AND ($4::text IS NULL OR project = $4 OR ($4 = '${NO_PROJECT}' AND project IS NULL))`;
-  return { args, scopeWhere };
 }
 
 app.get('/api/analytics', async (req, res) => {
@@ -704,31 +656,6 @@ app.delete('/api/sessions/:id', async (req, res) => {
   });
 });
 
-/** BEGIN → fn → COMMIT (fn returns true) or ROLLBACK. Every await is inside the try — a failed
- *  pool.connect() or ROLLBACK on a dead connection must answer 500, not become an unhandled
- *  rejection that kills the process. */
-async function inTransaction(
-  res: express.Response,
-  label: string,
-  fn: (client: import('pg').PoolClient) => Promise<boolean>,
-) {
-  let client: import('pg').PoolClient | undefined;
-  try {
-    client = await pool.connect();
-    await client.query('BEGIN');
-    await client.query((await fn(client)) ? 'COMMIT' : 'ROLLBACK');
-  } catch (err) {
-    await client?.query('ROLLBACK').catch(() => {});
-    if (!res.headersSent) sendError(res, label, err);
-    else console.error(`${label} error after response:`, err);
-  } finally {
-    client?.release();
-  }
-}
-
-// Delete every session for one author+project (a "project" on the dashboard). Same
-// same-transaction tombstone. The '(no project)' sentinel is a route-boundary concept only —
-// it must not leak into the deletions table as a literal string.
 app.delete('/api/projects', async (req, res) => {
   const { author, project } = req.query;
   if (typeof author !== 'string' || typeof project !== 'string' || !author || !project) {
@@ -815,6 +742,11 @@ app.get('/api/projects', async (req, res) => {
   }
 });
 
+// Route modules — insights (decision log, tools, subagents & skills) and trends (cost trends,
+// activity heatmap, person profile, sparklines). Registered before the /api 404 catch-all.
+registerInsights(app);
+registerTrends(app);
+
 // Unknown /api/* → JSON 404 instead of falling through to the SPA's index.html.
 app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
 
@@ -854,7 +786,12 @@ async function start() {
   } finally {
     client.release(true); // discard: don't return a no-timeout session to the pool
   }
-  const server = app.listen(PORT, () => console.log(`ClaudeLens server on http://localhost:${PORT}`));
+  const server = app.listen(PORT, () => {
+    console.log(`ClaudeLens server on http://localhost:${PORT}`);
+    // Warm the activity heatmap's per-session transcript cache (~3 s cold) so the first Overview
+    // visit after a deploy doesn't pay it. Best-effort; failures are irrelevant.
+    fetch(`http://127.0.0.1:${PORT}/api/trends/activity`).catch(() => {});
+  });
   // Graceful stop on deploy: finish in-flight ingests, then close the pool.
   const shutdown = (sig: string) => {
     console.log(`${sig}: draining`);

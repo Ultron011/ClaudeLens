@@ -9,10 +9,10 @@
 import { readdir, readFile, writeFile, unlink, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadConfig, updateConfig, isExcludedLocally, REPO_MARKER } from './config.js';
+import { loadConfig, updateConfig, isExcludedLocally, REPO_MARKER, projectsDir } from './config.js';
 import { backfillProject } from './history.js';
 
-const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
+const PROJECTS_DIR = projectsDir();
 const pretty = (d: string) => d.replace(homedir(), '~');
 
 function argFlag(name: string): boolean {
@@ -31,7 +31,7 @@ function positionalDir(): string {
  * that's empty (or an unsubstituted placeholder), fall back to the newest
  * transcript whose cwd matches `cwd`.
  */
-async function resolveSessionId(explicit: string | undefined, cwd: string): Promise<string | undefined> {
+export async function resolveSessionId(explicit: string | undefined, cwd: string): Promise<string | undefined> {
   const clean = explicit?.trim();
   if (clean && !clean.includes('$') && !clean.includes('{')) return clean;
 

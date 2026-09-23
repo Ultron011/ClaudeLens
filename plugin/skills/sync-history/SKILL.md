@@ -1,5 +1,5 @@
 ---
-description: Backfill history from before ClaudeLens was installed. Lists every project under ~/.claude/projects, lets you pick which to sync, then uploads all their past sessions to the dashboard.
+description: Backfill history from before ClaudeLens was installed. Lists every project under ~/.claude/projects (or $CLAUDE_CONFIG_DIR/projects), lets you pick which to sync, then uploads all their past sessions to the dashboard.
 ---
 
 This is a two-step, chat-driven flow — there is no interactive terminal picker,
@@ -11,7 +11,8 @@ so selection happens by you listing numbers in the conversation.
 node "${CLAUDE_PLUGIN_ROOT}/dist/claudelens.mjs" list-projects
 ```
 
-This prints a JSON array of every project found under `~/.claude/projects`, each
+This prints a JSON array of every project found under the active Claude profile's
+`projects` dir (`~/.claude/projects`, or `$CLAUDE_CONFIG_DIR/projects`), each
 with `index`, `cwd` (the real project path), `sessions` (total session count),
 `synced` (how many were already backfilled previously), and `lastActivity`.
 

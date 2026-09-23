@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter, Routes, Route } from 'react-router-dom';
+import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AppLayout } from './components/AppLayout.js';
 import { OverviewPage } from './pages/OverviewPage.js';
 import { UserPage } from './pages/UserPage.js';
@@ -10,6 +10,9 @@ import { AnalyticsPage } from './pages/AnalyticsPage.js';
 import { ModelAnalyticsPage } from './pages/ModelAnalyticsPage.js';
 import { SearchPage } from './pages/SearchPage.js';
 import { NotFoundPage } from './pages/NotFoundPage.js';
+import { DecisionsPage } from './pages/DecisionsPage.js';
+import { ToolsPage } from './pages/ToolsPage.js';
+import { AgentsPage } from './pages/AgentsPage.js';
 import './styles.css';
 import './styles.extra.css';
 
@@ -31,6 +34,12 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
           <Route path="/u/:author/:project" element={<ProjectPage />} />
           <Route path="/session/:id" element={<SessionPage />} />
           <Route path="/search" element={<SearchPage />} />
+          {/* Insights: team-wide decision log, tool reliability, subagents & skills. Person and
+           * project scope ride in the query string (?person=&project=), not the path. */}
+          <Route path="/insights" element={<Navigate to="/insights/decisions" replace />} />
+          <Route path="/insights/decisions" element={<DecisionsPage />} />
+          <Route path="/insights/tools" element={<ToolsPage />} />
+          <Route path="/insights/agents" element={<AgentsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>
       </Routes>

@@ -15,6 +15,9 @@ import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels, modelActiveMs, type ModelRow } from '../charts/palette.js';
 import { DataTable, type Column } from '../components/DataTable.js';
+import { DeltaBadge, periodLabel } from '../components/trends/DeltaBadge.js';
+import { EfficiencyPanel } from '../components/trends/EfficiencyPanel.js';
+import { useCompare } from '../components/trends/ActivityPanels.js';
 
 export function AnalyticsPage() {
   const { author } = useParams();
@@ -30,6 +33,12 @@ export function AnalyticsPage() {
       getAnalytics(identity, from.toISOString(), to.toISOString(), signal, { limit: 10, offset: 0, sort: ssort }),
     [identity, range, customFrom, customTo, ssort],
   );
+
+  // Period-over-period deltas for the KPI band (cheap separate query, cached server-side).
+  const { data: cmp } = useCompare({ identity, from: from.toISOString(), to: to.toISOString() });
+  const vs = periodLabel(from, to);
+  const delta = (k: 'sessions' | 'userMessages' | 'tokens' | 'cost') =>
+    cmp ? <DeltaBadge current={cmp.current[k]} previous={cmp.previous[k]} label={vs} /> : null;
 
   const daily = data?.daily ?? [];
   const labels = daily.map((d) => fmtDay(d.day));
@@ -144,26 +153,46 @@ export function AnalyticsPage() {
                   label="Sessions"
                   icon="message"
                   value={Number(data?.totals.sessions ?? 0).toLocaleString()}
-                  foot={`in ${rangeLabel}`}
+                  foot={
+                    <>
+                      {delta('sessions')}
+                      <span className="kpi-foot-rest">{`in ${rangeLabel}`}</span>
+                    </>
+                  }
                   primary
                 />
                 <Kpi
                   label="Messages"
                   icon="person"
                   value={Number(data?.totals.userMessages ?? 0).toLocaleString()}
-                  foot={`${Number(data?.totals.turns ?? 0).toLocaleString()} Claude turns back`}
+                  foot={
+                    <>
+                      {delta('userMessages')}
+                      <span className="kpi-foot-rest">{`${Number(data?.totals.turns ?? 0).toLocaleString()} Claude turns`}</span>
+                    </>
+                  }
                 />
                 <Kpi
                   label="Tokens"
                   icon="layers"
                   value={fmtTokens(Number(data?.totals.tokens ?? 0))}
-                  foot="input + output + cache"
+                  foot={
+                    <>
+                      {delta('tokens')}
+                      <span className="kpi-foot-rest">input + output + cache</span>
+                    </>
+                  }
                 />
                 <Kpi
                   label="Cost"
                   icon="coin"
                   value={fmtCost(data?.totals.cost ?? 0)}
-                  foot="from the transcript, not billing"
+                  foot={
+                    <>
+                      {delta('cost')}
+                      <span className="kpi-foot-rest">from the transcript, not billing</span>
+                    </>
+                  }
                 />
               </>
             )}
@@ -296,6 +325,8 @@ export function AnalyticsPage() {
                 />
               )}
             </section>
+
+            <EfficiencyPanel identity={identity} from={from} to={to} />
 
             <section className="panel col-12">
               <div className="panel-head">

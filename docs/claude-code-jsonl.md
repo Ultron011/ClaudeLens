@@ -6,7 +6,7 @@ Ground truth for `~/.claude/projects/<url-encoded-cwd>/<sessionId>.jsonl`, the f
 
 - One session = one file: `~/.claude/projects/<url-encoded-cwd>/<sessionId>.jsonl`.
 - One JSON object per line. **Malformed lines happen in practice** — `parseTranscript` wraps `JSON.parse` per line in `try/catch` and silently skips failures (`parser.ts:134-138`). Never assume a file parses cleanly end to end.
-- Honor `CLAUDE_CONFIG_DIR` if set — it moves `~/.claude` (and therefore `~/.claude/projects` and `~/.claude.json`) elsewhere. See `cli/src/account.ts`.
+- Honor `CLAUDE_CONFIG_DIR` if set (one per Claude Code profile) — it moves `~/.claude` (and therefore `~/.claude/projects` and `~/.claude/plugins`) to `$CLAUDE_CONFIG_DIR`, and `~/.claude.json` to `$CLAUDE_CONFIG_DIR/.claude.json` (inside the dir, not beside it). The CLI resolves all of these via `claudeConfigDir()` / `projectsDir()` (`cli/src/config.ts`) and `accountPath()` (`cli/src/account.ts`).
 
 ## Line-type census (12 transcripts, ~4k user/assistant lines)
 
@@ -69,6 +69,26 @@ What changed and what the parser (v7) now reads:
 - `system` subtypes: `stop_hook_summary` (718) then `turn_duration` (624) close each turn *after*
   Stop hooks return — the detached sync waits for either at the file tail.
 
+### Slash commands, branches, files (read by parser v9)
+
+- **Slash commands** the human runs are written as a wrapper, e.g.
+  `<command-name>/model</command-name>\n<command-message>model</command-message>\n<command-args></command-args>`,
+  in ONE of two places (never both for the same invocation, verified on 558 local transcripts):
+  a `user` line with **string** `message.content` (`/model`, `/clear`, `/compact`, `/login`,
+  `/effort`) or a `system` line with `subtype: "local_command"` and a top-level **`content`**
+  string (`/remote-control`, `/resume`, sometimes `/model`) — commands that never reach the model.
+  The command's output follows as `<local-command-stdout>…</local-command-stdout>` (a separate
+  user or local_command line). `cleanUserText` strips all of it from turn text, so
+  `stats.slashCommands` is read from the raw text **before** stripping; `isMeta` / sidechain lines
+  and tool_result bodies are ignored (a `grep` output quoting a wrapper isn't a command). Plugin
+  / skill commands use the same wrapper (`/claudelens:status`); a missing leading `/` is added.
+- **`gitBranch`** is on nearly every line and changes mid-session when the user switches branch
+  (8 of 558 local sessions had >1) — `stats.gitBranches` keeps every distinct value; the
+  top-level `ParsedSession.gitBranch` stays the first one seen.
+- **File paths** come from `tool_use.input.file_path` (`Read`, `Edit`, `MultiEdit`, `Write`) and
+  `input.notebook_path` (`NotebookEdit`) — absolute paths in the OS's own separators. Relative
+  to `cwd` they become repo paths; Windows paths need `\` → `/` first.
+
 ## Complete observed top-level key set
 
 ```
@@ -81,7 +101,7 @@ requestId, sessionId, session_id, slug, snapshot, snapshotMessageId, stopReason,
 toolDenialKind, toolUseID, toolUseResult, trackingPath, type, userFeedback, userType, uuid, version
 ```
 
-`RawEntry` in `shared/src/types.ts` types only the subset the parser actually reads (`type`, `uuid`, `parentUuid`, `sessionId`, `timestamp`, `cwd`, `gitBranch`, `version`, `model`, `aiTitle`, `isSidechain`, `subtype`, `durationMs`, `permissionMode`, `origin`, `promptSource`, `isMeta`, `message`) — everything else above is real but untyped. Don't assume `RawEntry`'s field list is the whole line shape; it's a deliberate subset (see "uncaptured fields" below).
+`RawEntry` in `shared/src/types.ts` types only the subset the parser actually reads (`type`, `uuid`, `parentUuid`, `sessionId`, `timestamp`, `cwd`, `gitBranch`, `version`, `model`, `aiTitle`, `isSidechain`, `subtype`, `content` (system lines), `durationMs`, `permissionMode`, `origin`, `promptSource`, `isMeta`, `message`, plus the v7 keys) — everything else above is real but untyped. Don't assume `RawEntry`'s field list is the whole line shape; it's a deliberate subset (see "uncaptured fields" below).
 
 ## `permissionMode` — the auto-mode signal
 
