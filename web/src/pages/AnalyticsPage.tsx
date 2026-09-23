@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
 import { getAnalytics, type Analytics } from '../api.js';
@@ -8,7 +8,9 @@ import { Kpi, KpiSkeleton } from '../components/Kpi.js';
 import { Icon } from '../components/Icon.js';
 import { DateRangePicker } from '../components/DateRangePicker.js';
 import { useFetch } from '../useFetch.js';
-import { useDateRange, RANGE_PRESETS } from '../usePref.js';
+import { useDateRange, usePref, RANGE_PRESETS } from '../usePref.js';
+import { sortParamToState, sortStateToParam } from '../components/SessionList.js';
+import { useToast, errText } from '../components/Toast.js';
 import { Chart } from '../charts/Chart.js';
 import { Donut } from '../charts/Donut.js';
 import { foldModels, modelActiveMs, type ModelRow } from '../charts/palette.js';
@@ -20,9 +22,13 @@ export function AnalyticsPage() {
   const { range, from, to, customFrom, customTo, apply } = useDateRange();
   const days = RANGE_PRESETS[range];
 
+  // Sessions table order is server-side, so "Cost" means the priciest in the whole range.
+  const [ssort, setSsort] = usePref('ssort', 'recent');
+  const toast = useToast();
   const { data, err, loading } = useFetch<Analytics>(
-    (signal) => getAnalytics(identity, from.toISOString(), to.toISOString(), signal, { limit: 10, offset: 0 }),
-    [identity, range, customFrom, customTo],
+    (signal) =>
+      getAnalytics(identity, from.toISOString(), to.toISOString(), signal, { limit: 10, offset: 0, sort: ssort }),
+    [identity, range, customFrom, customTo, ssort],
   );
 
   const daily = data?.daily ?? [];
@@ -34,29 +40,38 @@ export function AnalyticsPage() {
   const [moreLoaded, setMoreLoaded] = useState(false);
   const [moreHasMore, setMoreHasMore] = useState(false);
 
+  // Bumped on every scope change; a "Load more" that resolves after one is discarded instead of
+  // appending rows from the old range.
+  const scopeGen = useRef(0);
   useEffect(() => {
+    scopeGen.current++;
     setMoreSessions([]);
     setMoreLoading(false);
     setMoreLoaded(false);
     setMoreHasMore(false);
-  }, [identity, range, customFrom, customTo]);
+  }, [identity, range, customFrom, customTo, ssort]);
 
   const sessions = [...(data?.sessions ?? []), ...moreSessions];
   const hasMoreSessions = moreLoaded ? moreHasMore : Boolean(data?.sessionsHasMore);
 
   async function loadMoreSessions() {
     if (!hasMoreSessions || moreLoading) return;
+    const gen = scopeGen.current;
     setMoreLoading(true);
     try {
       const next = await getAnalytics(identity, from.toISOString(), to.toISOString(), undefined, {
         limit: 10,
         offset: sessions.length,
+        sort: ssort,
       });
+      if (gen !== scopeGen.current) return;
       setMoreSessions((current) => [...current, ...next.sessions]);
       setMoreHasMore(next.sessionsHasMore);
       setMoreLoaded(true);
+    } catch (e) {
+      if (gen === scopeGen.current) toast(`Couldn’t load more sessions: ${errText(e)}`, 'error');
     } finally {
-      setMoreLoading(false);
+      if (gen === scopeGen.current) setMoreLoading(false);
     }
   }
   const slices = modelRows.map((m) => ({
@@ -286,7 +301,7 @@ export function AnalyticsPage() {
               <div className="panel-head">
                 <div>
                   <h4>Sessions</h4>
-                  <p className="panel-sub">Most recent sessions in the selected range.</p>
+                  <p className="panel-sub">Sessions in the selected range — sort by started, messages or cost.</p>
                 </div>
               </div>
               {loading && !data ? (
@@ -294,7 +309,7 @@ export function AnalyticsPage() {
               ) : sessions.length === 0 ? (
                 <p className="muted">No sessions in this range.</p>
               ) : (
-                <AnalyticsSessionsTable sessions={sessions} hasMore={hasMoreSessions} loadingMore={moreLoading} onLoadMore={loadMoreSessions} />
+                <AnalyticsSessionsTable sessions={sessions} hasMore={hasMoreSessions} loadingMore={moreLoading} onLoadMore={loadMoreSessions} sort={ssort} onSort={setSsort} />
               )}
             </section>
 
@@ -342,7 +357,7 @@ export function AnalyticsPage() {
 
 /** Keeps the chart slot the same height whether it's loading, empty, or drawn — so the bento
  *  never reflows as the four panels resolve. */
-function AnalyticsSessionsTable({ sessions, hasMore, loadingMore, onLoadMore }: { sessions: SessionSummary[]; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void }) {
+function AnalyticsSessionsTable({ sessions, hasMore, loadingMore, onLoadMore, sort, onSort }: { sessions: SessionSummary[]; hasMore: boolean; loadingMore: boolean; onLoadMore: () => void; sort: string; onSort: (s: string) => void }) {
   const columns: Column<SessionSummary>[] = [
     { key: 'person', header: 'Person', sortable: true, sortValue: (s) => s.author, render: (s) => (
       <Link to={`/u/${encodeURIComponent(s.author)}`} className="person">
@@ -357,12 +372,16 @@ function AnalyticsSessionsTable({ sessions, hasMore, loadingMore, onLoadMore }: 
     { key: 'messages', header: 'Messages', numeric: true, sortable: true, sortValue: (s) => msgCount(s.stats), render: (s) => msgCount(s.stats) },
     { key: 'model', header: 'Model used', sortable: true, sortValue: (s) => s.stats.models.join(', '), render: (s) => s.stats.models.join(', ') || Object.keys(s.stats.modelUsage).join(', ') || '—' },
     { key: 'cost', header: 'Cost', numeric: true, sortable: true, sortValue: (s) => s.stats.estimatedCostUsd ?? 0, render: (s) => fmtCost(s.stats.estimatedCostUsd) },
-    { key: 'created', header: 'Created', sortable: true, sortValue: (s) => s.createdAt, render: (s) => fmtDateTime(s.createdAt) },
+    { key: 'started', header: 'Started', sortable: true, sortValue: (s) => s.startedAt ?? s.createdAt, render: (s) => <span title="Your local time">{fmtDateTime(s.startedAt ?? s.createdAt)}</span> },
     { key: 'duration', header: 'Duration', numeric: true, sortable: true, sortValue: (s) => s.stats.durationMs ?? 0, render: (s) => fmtDuration(s.stats.durationMs) || '—' },
   ];
   return (
     <>
-      <DataTable columns={columns} rows={sessions} rowKey={(s) => s.id} caption="Sessions in the selected analytics range" ariaLabel="Sessions in the selected analytics range" className="analytics-sessions-table" />
+      <DataTable
+        columns={columns.map((c) => ({ ...c, sortable: ['started', 'messages', 'cost'].includes(c.key) }))}
+        sort={sortParamToState(sort)}
+        onSortChange={(st) => onSort(sortStateToParam(st))}
+        rows={sessions} rowKey={(s) => s.id} caption="Sessions in the selected analytics range" ariaLabel="Sessions in the selected analytics range" className="analytics-sessions-table" />
       {hasMore && (
         <div className="load-more-wrap">
           <button type="button" className="chip" onClick={onLoadMore} disabled={loadingMore}>

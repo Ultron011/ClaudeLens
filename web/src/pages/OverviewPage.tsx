@@ -21,7 +21,7 @@ export function OverviewPage() {
   const [layout, setLayout] = useLayoutPref();
   const { range, from, to, customFrom, customTo, apply } = useDateRange();
 
-  const { data: series } = useFetch<Analytics>(
+  const { data: series, err: seriesErr, refetch: refetchSeries } = useFetch<Analytics>(
     (signal) => getAnalytics(undefined, from.toISOString(), to.toISOString(), signal),
     [range, customFrom, customTo],
   );
@@ -35,8 +35,9 @@ export function OverviewPage() {
     value: Number(m.tokens),
   }));
 
-  const totalMessages = stats?.authors.reduce((n, a) => n + (a.userMessages ?? 0), 0) ?? 0;
-  const totalTokens = stats?.authors.reduce((n, a) => n + Number(a.tokens ?? 0), 0) ?? 0;
+  // KPIs follow the range picker like the charts beside them. They used to be all-time totals
+  // under a range picker, which read as "this period".
+  const tot = series?.totals;
 
   if (err) {
     return (
@@ -72,7 +73,7 @@ export function OverviewPage() {
       </div>
 
       <div className="kpi-row">
-        {!stats ? (
+        {!stats || !tot ? (
           <>
             <KpiSkeleton label="Sessions" />
             <KpiSkeleton label="People" />
@@ -84,27 +85,27 @@ export function OverviewPage() {
             <Kpi
               label="Sessions"
               icon="message"
-              value={stats.totals.sessions.toLocaleString()}
-              foot="tracked across the team"
+              value={tot.sessions.toLocaleString()}
+              foot={`${stats.totals.sessions.toLocaleString()} all time`}
               primary
             />
             <Kpi
               label="People"
               icon="people"
               value={String(stats.totals.authors)}
-              foot={`${stats.authors.reduce((n, a) => n + a.projects, 0)} projects between them`}
+              foot={`all time · ${stats.authors.reduce((n, a) => n + a.projects, 0)} projects between them`}
             />
             <Kpi
               label="Messages"
               icon="person"
-              value={totalMessages.toLocaleString()}
-              foot={`${stats.authors.reduce((n, a) => n + (a.turns ?? 0), 0).toLocaleString()} Claude turns back`}
+              value={(tot.userMessages ?? 0).toLocaleString()}
+              foot={`${(tot.turns ?? 0).toLocaleString()} Claude turns back`}
             />
             <Kpi
               label="Cost"
               icon="coin"
-              value={fmtCost(stats.totals.cost)}
-              foot={`${fmtTokens(totalTokens)} tokens, all time`}
+              value={fmtCost(tot.cost)}
+              foot={`${fmtTokens(tot.tokens ?? 0)} tokens · ${fmtCost(stats.totals.cost)} all time`}
             />
           </>
         )}
@@ -118,7 +119,9 @@ export function OverviewPage() {
               <p className="panel-sub">Messages sent per UTC day.</p>
             </div>
           </div>
-          {!series ? (
+          {seriesErr && !series ? (
+            <ChartError err={seriesErr} onRetry={refetchSeries} />
+          ) : !series ? (
             <div className="skel skel-chart" />
           ) : (
             <Chart
@@ -151,7 +154,9 @@ export function OverviewPage() {
               </p>
             </div>
           </div>
-          {!series ? (
+          {seriesErr && !series ? (
+            <ChartError err={seriesErr} onRetry={refetchSeries} />
+          ) : !series ? (
             <div className="skel skel-chart" />
           ) : slices.length === 0 ? (
             <p className="muted">No model usage in this range.</p>
@@ -361,5 +366,17 @@ function PeopleTable({ authors }: { authors: AuthorSummary[] }) {
   ];
   return (
     <DataTable columns={columns} rows={authors} rowKey={(a) => a.author} caption="People" ariaLabel="People" />
+  );
+}
+
+/** A failed chart fetch used to leave the skeleton shimmering forever. */
+function ChartError({ err, onRetry }: { err: string; onRetry: () => void }) {
+  return (
+    <div className="empty compact">
+      <p className="muted">Couldn’t load this chart: {err}</p>
+      <button type="button" className="chip" onClick={onRetry}>
+        Retry
+      </button>
+    </div>
   );
 }

@@ -257,22 +257,37 @@ function PermissionModesPanel({ modes }: { modes: Array<{ mode: string; sessions
 // Top tools panel
 // ---------------------------------------------------------------------------
 
-function TopToolsPanel({ tools }: { tools: Array<{ tool: string; uses: number }> }) {
+function TopToolsPanel({ tools }: { tools: Array<{ tool: string; uses: number; errors: number }> }) {
   if (!tools.length) return <p className="muted">No tool usage in this range.</p>;
   const max = tools[0]?.uses ?? 1;
   return (
     <div className="mode-list">
-      {tools.slice(0, 15).map((t) => (
-        <div key={t.tool} className="mode-row">
-          <span className="mode-name" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82em' }}>
-            {t.tool}
-          </span>
-          <div className="mode-bar-track">
-            <div className="mode-bar-fill" style={{ width: `${((t.uses / max) * 100).toFixed(1)}%` }} />
+      {tools.slice(0, 15).map((t) => {
+        // Failure rate from parser v7+ sessions; older rows report 0 errors, so this is a floor.
+        const rate = t.uses ? t.errors / t.uses : 0;
+        return (
+          <div key={t.tool} className="mode-row">
+            <span className="mode-name" style={{ fontFamily: 'var(--font-mono)', fontSize: '0.82em' }}>
+              {t.tool}
+            </span>
+            <div className="mode-bar-track">
+              <div className="mode-bar-fill" style={{ width: `${((t.uses / max) * 100).toFixed(1)}%` }} />
+            </div>
+            <span className="mode-count">
+              {t.uses.toLocaleString()}
+              {t.errors > 0 && (
+                <span
+                  className={rate >= 0.1 ? 'fail-rate high' : 'fail-rate'}
+                  title={`${t.errors.toLocaleString()} failed calls`}
+                >
+                  {' '}
+                  {(rate * 100).toFixed(rate < 0.1 ? 1 : 0)}% failed
+                </span>
+              )}
+            </span>
           </div>
-          <span className="mode-count">{t.uses.toLocaleString()}</span>
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
@@ -437,7 +452,7 @@ export function ModelAnalyticsPage() {
                 <div>
                   <h4>Top tools</h4>
                   <p className="panel-sub">
-                    Most-used Claude Code tools across all sessions in this range.
+                    Most-used Claude Code tools in this range, with how often each call failed.
                   </p>
                 </div>
               </div>

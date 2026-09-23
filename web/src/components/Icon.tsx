@@ -35,7 +35,16 @@ export type IconName =
   | 'arrowUpRight'
   | 'sun'
   | 'moon'
-  | 'calendar';
+  | 'calendar'
+  | 'check'
+  | 'dot'
+  | 'search'
+  | 'link'
+  | 'copy'
+  | 'eye'
+  | 'eyeOff'
+  | 'arrowUp'
+  | 'arrowDown';
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName;
@@ -174,6 +183,40 @@ const PATHS: Record<IconName, JSX.Element> = {
       <path d="M10.5 1.75v3" />
     </>
   ),
+  check: <path d="m3 8.5 3.25 3.25L13 5" />,
+  dot: <circle cx="8" cy="8" r="2.25" />,
+  search: (
+    <>
+      <circle cx="7" cy="7" r="4.25" />
+      <path d="m10.25 10.25 3.5 3.5" />
+    </>
+  ),
+  link: (
+    <>
+      <path d="M6.75 9.25a2.75 2.75 0 0 0 3.9 0l2-2a2.75 2.75 0 0 0-3.9-3.9l-.75.75" />
+      <path d="M9.25 6.75a2.75 2.75 0 0 0-3.9 0l-2 2a2.75 2.75 0 0 0 3.9 3.9l.75-.75" />
+    </>
+  ),
+  copy: (
+    <>
+      <rect x="5.25" y="5.25" width="8.5" height="8.5" rx="1.5" />
+      <path d="M10.75 5.25V3.75a1.5 1.5 0 0 0-1.5-1.5h-5.5a1.5 1.5 0 0 0-1.5 1.5v5.5a1.5 1.5 0 0 0 1.5 1.5h1.5" />
+    </>
+  ),
+  eye: (
+    <>
+      <path d="M1.75 8S4 3.75 8 3.75 14.25 8 14.25 8 12 12.25 8 12.25 1.75 8 1.75 8z" />
+      <circle cx="8" cy="8" r="2" />
+    </>
+  ),
+  eyeOff: (
+    <>
+      <path d="M6.3 4.05A6.4 6.4 0 0 1 8 3.75C12 3.75 14.25 8 14.25 8a11 11 0 0 1-1.6 2.1M4.3 5.3A10.6 10.6 0 0 0 1.75 8S4 12.25 8 12.25a6.3 6.3 0 0 0 3.1-.8" />
+      <path d="m2.5 2.5 11 11" />
+    </>
+  ),
+  arrowUp: <path d="M8 13V3.5M4 7.25 8 3.25l4 4" />,
+  arrowDown: <path d="M8 3v9.5M4 8.75l4 4 4-4" />,
 };
 
 /** The ClaudeLens brand mark.

@@ -35,7 +35,8 @@ export function useFetch<T>(
       })
       .catch((e) => {
         if (ac.signal.aborted) return;
-        setErr(String(e));
+        // ApiError carries the server's own message; String(e) would prefix "Error: ".
+        setErr(e instanceof Error ? e.message : String(e));
         setLoading(false);
       });
     return () => ac.abort();

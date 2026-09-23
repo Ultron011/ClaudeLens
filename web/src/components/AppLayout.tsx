@@ -3,6 +3,11 @@ import { NavLink, Outlet, useLocation } from 'react-router-dom';
 import { getStats, type OrgStats } from '../api.js';
 import { useFetch } from '../useFetch.js';
 import { Icon, Logo } from './Icon.js';
+import { ToastProvider } from './Toast.js';
+
+/** `to` is the current page or an ancestor of it. Plain startsWith() marked "/u/Sau" current on
+ *  "/u/Saurabh" — a prefix of the name, not of the path. */
+const isUnder = (pathname: string, to: string) => pathname === to || pathname.startsWith(to + '/');
 
 /** Org stats, fetched once for the whole app.
  *
@@ -18,9 +23,18 @@ const StatsCtx = createContext<{ stats: OrgStats | null; err: string; loading: b
 export const useOrgStats = () => useContext(StatsCtx);
 
 export function AppLayout() {
-  const { data: stats, err, loading } = useFetch<OrgStats>((signal) => getStats(signal), []);
+  const { data: stats, err, loading, refetch } = useFetch<OrgStats>((signal) => getStats(signal), []);
+
+  // The rail's counts were fetched once per page load and went stale on a dashboard left open.
+  // Refresh when the tab comes back into view (cheap, and no polling while hidden).
+  useEffect(() => {
+    const onVis = () => document.visibilityState === 'visible' && refetch();
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [refetch]);
 
   return (
+    <ToastProvider>
     <StatsCtx.Provider value={{ stats, err, loading }}>
       <a className="skip-link" href="#main">
         Skip to content
@@ -35,11 +49,13 @@ export function AppLayout() {
        * round-trip in JS deciding which navigation exists. */}
       <MobileNav stats={stats} />
     </StatsCtx.Provider>
+    </ToastProvider>
   );
 }
 
 function SideNav({ stats }: { stats: OrgStats | null }) {
-  const { pathname } = useLocation();
+  const { pathname, search } = useLocation();
+  const featuredView = pathname === '/search' && new URLSearchParams(search).get('featured') === 'true';
   const people = stats?.authors ?? [];
 
   return (
@@ -71,6 +87,29 @@ function SideNav({ stats }: { stats: OrgStats | null }) {
           </span>
           <span className="nav-text">Models</span>
         </NavLink>
+        {/* NavLink matches paths only, so /search and /search?featured=true would both light up;
+          * the query string decides which of the two is current. */}
+        <NavLink
+          to="/search"
+          className="nav-item"
+          aria-current={pathname === '/search' && !featuredView ? 'page' : 'false'}
+        >
+          <span className="nav-icon">
+            <Icon name="search" />
+          </span>
+          <span className="nav-text">Sessions</span>
+        </NavLink>
+        {/* Curation is the product's point — featured sessions get a one-click list. */}
+        <NavLink
+          to="/search?featured=true"
+          className="nav-item nav-item--sub"
+          aria-current={featuredView ? 'page' : 'false'}
+        >
+          <span className="nav-icon">
+            <Icon name="star" />
+          </span>
+          <span className="nav-text">Featured</span>
+        </NavLink>
       </div>
 
       {people.length > 0 && (
@@ -82,7 +121,7 @@ function SideNav({ stats }: { stats: OrgStats | null }) {
             {people.map((a) => {
               const to = `/u/${encodeURIComponent(a.author)}`;
               // Mark the person current for their project + session pages too, not just /u/:author.
-              const current = pathname.startsWith(to);
+              const current = isUnder(pathname, to);
               return (
                 <li key={a.author}>
                   <NavLink to={to} className="nav-item" aria-current={current ? 'page' : undefined}>
@@ -189,7 +228,7 @@ function MobileNav({ stats }: { stats: OrgStats | null }) {
                       <NavLink
                         to={to}
                         className="mnav-person"
-                        aria-current={pathname.startsWith(to) ? 'page' : undefined}
+                        aria-current={isUnder(pathname, to) ? 'page' : undefined}
                       >
                         <span className="nav-avatar" aria-hidden>
                           {a.author.slice(0, 1).toUpperCase()}

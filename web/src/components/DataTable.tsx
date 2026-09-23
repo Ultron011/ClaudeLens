@@ -19,14 +19,32 @@ export interface DataTableProps<T> {
   caption: string;
   ariaLabel: string;
   className?: string;
+  /** Controlled sort. With `onSortChange` set the table does NOT reorder `rows` itself — the
+   *  owner re-fetches in the new order. Needed for paginated lists, where sorting only the loaded
+   *  page showed "the most expensive of these 10", not of the whole range. */
+  sort?: SortState | null;
+  onSortChange?: (s: SortState) => void;
 }
+
+export type SortState = { key: string; dir: 'asc' | 'desc' };
 
 /** One generic sortable table, used for every list on the site. Wrapped in `.table-scroll`
  *  (tabIndex + role="region") so keyboard users can scroll it horizontally without a mouse. */
-export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel, className }: DataTableProps<T>) {
-  const [sort, setSort] = useState<{ key: string; dir: 'asc' | 'desc' } | null>(null);
+export function DataTable<T>({
+  columns,
+  rows,
+  rowKey,
+  caption,
+  ariaLabel,
+  className,
+  sort: controlledSort,
+  onSortChange,
+}: DataTableProps<T>) {
+  const [localSort, setLocalSort] = useState<SortState | null>(null);
+  const controlled = !!onSortChange;
+  const sort = controlled ? (controlledSort ?? null) : localSort;
 
-  const sorted = sort
+  const sorted = sort && !controlled
     ? [...rows].sort((a, b) => {
         const col = columns.find((c) => c.key === sort.key);
         const av = col?.sortValue?.(a) ?? '';
@@ -38,7 +56,14 @@ export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel, classN
     : rows;
 
   function toggleSort(key: string) {
-    setSort((s) => (s?.key === key ? { key, dir: s.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: 'asc' }));
+    // Numbers start descending (biggest first is what you're usually after), text ascending.
+    const numeric = columns.find((c) => c.key === key)?.numeric;
+    const next: SortState =
+      sort?.key === key
+        ? { key, dir: sort.dir === 'asc' ? 'desc' : 'asc' }
+        : { key, dir: numeric ? 'desc' : 'asc' };
+    if (controlled) onSortChange!(next);
+    else setLocalSort(next);
   }
 
   return (
@@ -55,13 +80,12 @@ export function DataTable<T>({ columns, rows, rowKey, caption, ariaLabel, classN
                   {c.sortable ? (
                     <button type="button" className="th-sort" onClick={() => toggleSort(c.key)}>
                       {c.header}
-                      {active && (
-                        <Icon
-                          className="sort-arrow"
-                          name={sort.dir === 'asc' ? 'caretUp' : 'caretDown'}
-                          size={9}
-                        />
-                      )}
+                      {/* Idle columns get a faint caret so sortability is visible before a click. */}
+                      <Icon
+                        className={active ? 'sort-arrow' : 'sort-arrow idle'}
+                        name={active && sort.dir === 'asc' ? 'caretUp' : 'caretDown'}
+                        size={9}
+                      />
                     </button>
                   ) : (
                     c.header

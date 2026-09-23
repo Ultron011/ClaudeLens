@@ -1,8 +1,8 @@
-import { useState } from 'react';
-import { useNavigate, useParams } from 'react-router-dom';
-import type { Turn, ToolCall } from '@claudelens/shared';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useLocation, useNavigate, useParams } from 'react-router-dom';
+import type { AskedQuestion, Turn, ToolCall } from '@claudelens/shared';
 import { getSession, patchSession, deleteSession, type SessionDetail } from '../api.js';
-import { fmtDuration, fmtTokens, fmtCost, msgCount } from '../format.js';
+import { fmtDuration, fmtTokens, fmtCost, fmtTime, fmtDateTime, msgCount } from '../format.js';
 import { Shell, type Crumb } from '../components/Shell.js';
 import { Metric } from '../components/Stat.js';
 import { Icon } from '../components/Icon.js';
@@ -10,6 +10,19 @@ import { ConfirmDialog } from '../components/ConfirmDialog.js';
 import { AccountLine } from '../components/AccountLine.js';
 import { TurnModeBadge, modalMode } from '../components/ModeBadges.js';
 import { useFetch } from '../useFetch.js';
+import { useToast, errText } from '../components/Toast.js';
+import { NotFoundPage } from './NotFoundPage.js';
+
+/** Claude Code injects a whole skill's markdown as a user-role turn; it isn't something the
+ *  person typed, so it renders as a collapsed "skill loaded" line instead of a user bubble. */
+const SKILL_BODY = /^Base directory for this skill:\s*(\S+)/;
+
+/** Everything find-in-transcript searches for one turn. */
+const turnHaystack = (t: Turn) =>
+  [t.text, t.thinking, ...t.toolCalls.flatMap((c) => [c.name, c.detail, c.args])]
+    .filter(Boolean)
+    .join('\n')
+    .toLowerCase();
 
 export function SessionPage() {
   const { id = '' } = useParams<{ id: string }>();
@@ -19,12 +32,107 @@ export function SessionPage() {
     refetch,
   } = useFetch<SessionDetail>((signal) => getSession(id, signal), [id]);
   const [pendingDelete, setPendingDelete] = useState(false);
+  // Expand/collapse-all broadcast: `v` bumps on every click so each message re-syncs to `open`
+  // even when it was toggled by hand since the last broadcast.
+  const [expandAll, setExpandAll] = useState({ open: false, v: 0 });
+  // One-shot "open and scroll to turn i" (permalink on load, find, prompt stepper). `v` bumps so
+  // revealing the same turn twice still re-opens it.
+  const [reveal, setReveal] = useState({ i: -1, v: 0 });
+  const [find, setFind] = useState('');
+  const [findPos, setFindPos] = useState(0);
   const nav = useNavigate();
+  const toast = useToast();
+  const { hash } = useLocation();
+  const turns = s?.turns ?? [];
 
-  async function toggleFeatured() {
+  const goTo = useCallback((i: number) => {
+    setReveal((r) => ({ i, v: r.v + 1 }));
+    // After the reveal renders, so the scroll lands on the expanded height.
+    requestAnimationFrame(() =>
+      document.getElementById(`t-${i}`)?.scrollIntoView({
+        block: 'start',
+        behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth',
+      }),
+    );
+  }, []);
+
+  // Permalink: /session/:id#t-42 opens and scrolls to that turn once the transcript arrives.
+  const linkedOnce = useRef(false);
+  useEffect(() => {
+    const m = /^#t-(\d+)$/.exec(hash);
+    if (!m || !turns.length || linkedOnce.current) return;
+    linkedOnce.current = true;
+    goTo(Number(m[1]));
+  }, [hash, turns.length, goTo]);
+
+  const promptIdx = useMemo(
+    () => turns.flatMap((t, i) => (t.role === 'user' && !SKILL_BODY.test(t.text) ? [i] : [])),
+    [turns],
+  );
+  const matches = useMemo(() => {
+    const q = find.trim().toLowerCase();
+    if (q.length < 2) return [];
+    return turns.flatMap((t, i) => (turnHaystack(t).includes(q) ? [i] : []));
+  }, [turns, find]);
+  const matchSet = useMemo(() => new Set(matches), [matches]);
+
+  function stepFind(dir: 1 | -1) {
+    if (!matches.length) return;
+    const next = (findPos + dir + matches.length) % matches.length;
+    setFindPos(next);
+    goTo(matches[next]);
+  }
+
+  /** Next/previous human prompt relative to what's on screen now. */
+  const stepPrompt = useCallback(
+    (dir: 1 | -1) => {
+      const tops = promptIdx.map((i) => document.getElementById(`t-${i}`)?.getBoundingClientRect().top ?? 0);
+      const band = 90; // below the sticky bars
+      const target =
+        dir === 1
+          ? promptIdx.find((_, k) => tops[k] > band + 4)
+          : [...promptIdx].reverse().find((_, k) => tops[promptIdx.length - 1 - k] < band - 4);
+      if (target !== undefined) goTo(target);
+    },
+    [promptIdx, goTo],
+  );
+
+  // j / k step between prompts, like a reader. Ignored while typing in any field.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const el = e.target as HTMLElement;
+      if (e.metaKey || e.ctrlKey || e.altKey || el.closest('input, textarea, select, [contenteditable]')) return;
+      if (e.key === 'j') stepPrompt(1);
+      else if (e.key === 'k') stepPrompt(-1);
+    };
+    document.addEventListener('keydown', onKey);
+    return () => document.removeEventListener('keydown', onKey);
+  }, [stepPrompt]);
+
+  async function patch(body: { featured?: boolean; hidden?: boolean }, ok: string) {
     if (!s) return;
-    await patchSession(s.id, { featured: !s.featured });
-    refetch();
+    try {
+      await patchSession(s.id, body);
+      toast(ok);
+      refetch();
+    } catch (e) {
+      toast(`Couldn’t update the session: ${errText(e)}`, 'error');
+    }
+  }
+  const toggleFeatured = () =>
+    patch({ featured: !s?.featured }, s?.featured ? 'Removed from featured' : 'Featured');
+  const toggleHidden = () =>
+    patch({ hidden: !s?.hidden }, s?.hidden ? 'Restored to the gallery' : 'Hidden from the gallery and team stats');
+
+  async function copyLink(i: number) {
+    const url = `${location.origin}/session/${id}#t-${i}`;
+    history.replaceState(null, '', `#t-${i}`);
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Link to this message copied');
+    } catch {
+      toast('Copy failed — the address bar now links to this message', 'error');
+    }
   }
   async function confirmDelete() {
     if (!s) return;
@@ -38,6 +146,7 @@ export function SessionPage() {
     );
   }
 
+  if (err === 'not found') return <NotFoundPage what="session" />;
   if (err)
     return (
       <Shell crumbs={[{ label: 'Session' }]}>
@@ -85,6 +194,15 @@ export function SessionPage() {
             <Icon name="star" size={13} filled={s.featured} />
             {s.featured ? 'Featured' : 'Feature'}
           </button>
+          <button
+            className={s.hidden ? 'chip on' : 'chip'}
+            onClick={toggleHidden}
+            aria-pressed={s.hidden}
+            title="Hidden sessions stay out of the gallery and team stats"
+          >
+            <Icon name={s.hidden ? 'eye' : 'eyeOff'} size={13} />
+            {s.hidden ? 'Unhide' : 'Hide'}
+          </button>
           <button className="chip danger" onClick={() => setPendingDelete(true)}>
             <Icon name="trash" size={13} />
             Delete
@@ -96,7 +214,7 @@ export function SessionPage() {
         {s.hidden && (
           <div className="notice">
             This session is <strong>hidden</strong> from the gallery and team stats. It still
-            re-syncs but stays hidden until restored.
+            re-syncs but stays hidden until you <button type="button" className="link-btn" onClick={toggleHidden}>unhide it</button>.
           </div>
         )}
         <div className="session-header">
@@ -130,6 +248,7 @@ export function SessionPage() {
             {st.durationMs ? <Metric label="duration" value={fmtDuration(st.durationMs)} /> : null}
             <Metric label="cost" value={fmtCost(st.estimatedCostUsd)} />
             <Metric label="models" value={st.models.join(', ') || '—'} />
+            {s.startedAt && <Metric label="started" value={fmtDateTime(s.startedAt)} />}
           </div>
           {/* One labelled block per kind, on a single spacing rhythm. Previously these were three
             * bare pill rows with different gaps stacked under the stats, which read as ragged and
@@ -153,6 +272,58 @@ export function SessionPage() {
                 </dd>
               </div>
             )}
+            {st.subagentUsage && Object.keys(st.subagentUsage).length > 0 && (
+              <div className="session-fact">
+                <dt>Subagent work</dt>
+                <dd>
+                  {Object.entries(st.subagentUsage)
+                    .sort((a, b) => b[1].costUsd - a[1].costUsd)
+                    .map(([name, u]) => (
+                      <span
+                        key={name}
+                        className="pill agent"
+                        title={`${u.runs} run(s) · ${fmtTokens(u.totalTokens)} tokens · ${u.toolCalls} tool calls`}
+                      >
+                        @{name} <span className="tag-count">{fmtCost(u.costUsd)}</span>
+                      </span>
+                    ))}
+                </dd>
+              </div>
+            )}
+            {st.toolErrors && Object.keys(st.toolErrors).length > 0 && (
+              <div className="session-fact">
+                <dt>Tool failures</dt>
+                <dd>
+                  {Object.entries(st.toolErrors)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([t, n]) => (
+                      <span key={t} className="pill pill-error" title={`${n} of ${st.toolUsage[t] ?? '?'} ${t} calls failed`}>
+                        {t} <span className="tag-count">{n}/{st.toolUsage[t] ?? '?'}</span>
+                      </span>
+                    ))}
+                  {Object.entries(st.toolDenials ?? {}).map(([k, n]) => (
+                    <span key={k} className="pill" title="Tool calls blocked before they ran">
+                      denied: {k} <span className="tag-count">{n}</span>
+                    </span>
+                  ))}
+                </dd>
+              </div>
+            )}
+            {(st.interrupts || st.compactions || st.apiErrors) ? (
+              <div className="session-fact">
+                <dt>Events</dt>
+                <dd>
+                  {st.interrupts ? <span className="pill">{st.interrupts} interrupted</span> : null}
+                  {st.compactions ? <span className="pill">{st.compactions} compacted</span> : null}
+                  {st.apiErrors ? (
+                    <span className="pill pill-error">
+                      {st.apiErrors} API errors
+                      {st.rateLimitHits ? ` (${st.rateLimitHits} usage limit)` : ''}
+                    </span>
+                  ) : null}
+                </dd>
+              </div>
+            ) : null}
             {Object.keys(st.toolUsage).length > 0 && (
               <div className="session-fact">
                 <dt>Tools</dt>
@@ -170,11 +341,77 @@ export function SessionPage() {
           </dl>
         </div>
 
+        {/* Sticky: long sessions (1,500+ turns) need find and prompt-to-prompt jumps from any
+          * scroll position, not just the top. */}
+        <div className="transcript-bar" role="toolbar" aria-label="Transcript">
+          <form
+            className="transcript-find"
+            role="search"
+            onSubmit={(e) => {
+              e.preventDefault();
+              stepFind(1);
+            }}
+          >
+            <Icon name="search" size={12} />
+            <input
+              type="search"
+              placeholder="Find in transcript…"
+              aria-label="Find in transcript"
+              value={find}
+              onChange={(e) => {
+                setFind(e.target.value);
+                setFindPos(-1);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && e.shiftKey) {
+                  e.preventDefault();
+                  stepFind(-1);
+                }
+              }}
+            />
+            {find.trim().length >= 2 && (
+              <span className="find-count" aria-live="polite">
+                {matches.length ? `${Math.max(findPos, 0) + 1} of ${matches.length}` : 'no matches'}
+              </span>
+            )}
+            <button type="button" className="chip icon" aria-label="Previous match" disabled={!matches.length} onClick={() => stepFind(-1)}>
+              <Icon name="arrowUp" size={12} />
+            </button>
+            <button type="submit" className="chip icon" aria-label="Next match" disabled={!matches.length}>
+              <Icon name="arrowDown" size={12} />
+            </button>
+          </form>
+          <div className="transcript-bar-actions">
+            <span className="muted prompt-nav-label" title="Keyboard: j / k">
+              {promptIdx.length} prompts
+            </span>
+            <button type="button" className="chip icon" aria-label="Previous prompt (k)" title="Previous prompt (k)" onClick={() => stepPrompt(-1)}>
+              <Icon name="arrowUp" size={12} />
+            </button>
+            <button type="button" className="chip icon" aria-label="Next prompt (j)" title="Next prompt (j)" onClick={() => stepPrompt(1)}>
+              <Icon name="arrowDown" size={12} />
+            </button>
+            <button
+              type="button"
+              className="chip"
+              onClick={() => setExpandAll((x) => ({ open: !x.open, v: x.v + 1 }))}
+            >
+              <Icon name={expandAll.open ? 'chevronDown' : 'chevronRight'} size={12} />
+              {expandAll.open ? 'Collapse all' : 'Expand all'}
+            </button>
+          </div>
+        </div>
         <div className="transcript">
           {s.turns.map((t, i) => (
             <TurnView
               key={i}
+              index={i}
               turn={t}
+              expandAll={expandAll}
+              revealV={reveal.i === i ? reveal.v : 0}
+              matched={matchSet.has(i)}
+              current={matches[findPos] === i}
+              onCopyLink={copyLink}
               modal={modal}
               prevMode={i > 0 ? s.turns[i - 1].permissionMode : undefined}
               author={s.author}
@@ -205,24 +442,50 @@ function TurnView({
   modal,
   prevMode,
   author,
+  expandAll,
+  index,
+  revealV,
+  matched,
+  current,
+  onCopyLink,
 }: {
   turn: Turn;
   modal?: Turn['permissionMode'];
   prevMode?: Turn['permissionMode'];
   author: string;
+  expandAll: { open: boolean; v: number };
+  index: number;
+  revealV: number;
+  matched: boolean;
+  current: boolean;
+  onCopyLink: (i: number) => void;
 }) {
   const [showThinking, setShowThinking] = useState(false);
   const isUser = turn.role === 'user';
+  const skill = isUser ? SKILL_BODY.exec(turn.text)?.[1] : undefined;
   // Icon, not a name: the speaker alternates side and colour, so a repeated name on every turn is
   // noise. The name still ships to assistive tech below, where alignment and hue mean nothing.
   const speaker = isUser ? author : turn.isSidechain ? 'Claude subagent' : 'Claude';
   return (
-    <article className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}`}>
+    <article
+      id={`t-${index}`}
+      className={`turn ${isUser ? 'user' : 'assistant'}${turn.isSidechain ? ' sidechain' : ''}${skill ? ' injected' : ''}${matched ? ' matched' : ''}${current ? ' current' : ''}`}
+    >
       <span className="turn-avatar" aria-hidden>
         <Icon name={isUser ? 'person' : turn.isSidechain ? 'people' : 'lens'} size={14} />
       </span>
       <div className="turn-bubble">
         <span className="sr-only">{speaker}:</span>
+        {/* Time doubles as the permalink: click copies a link straight to this message. */}
+        <button
+          type="button"
+          className="turn-stamp"
+          title={turn.timestamp ? `${fmtDateTime(turn.timestamp)} — copy link to this message` : 'Copy link to this message'}
+          onClick={() => onCopyLink(index)}
+        >
+          {turn.timestamp ? fmtTime(turn.timestamp) : '#'}
+          <Icon name="link" size={10} />
+        </button>
         {(turn.isSidechain ||
           (turn.permissionMode && turn.permissionMode !== (prevMode ?? modal))) && (
           <div className="turn-meta">
@@ -243,7 +506,14 @@ function TurnView({
             {showThinking && <pre className="thinking-text">{turn.thinking}</pre>}
           </div>
         )}
-        {turn.text && <TurnText text={turn.text} />}
+        {turn.text && (
+          <CollapsibleText
+            text={turn.text}
+            expandAll={expandAll}
+            revealV={revealV}
+            preview={skill ? `Skill instructions loaded: ${skill.split('/').pop()}` : undefined}
+          />
+        )}
         {turn.toolCalls.length > 0 && (
           <div className="tool-calls">
             {turn.toolCalls.map((tc, i) => (
@@ -253,6 +523,62 @@ function TurnView({
         )}
       </div>
     </article>
+  );
+}
+
+/** A message is long when it wouldn't fit on its one-line preview anyway. */
+const isLong = (text: string) => text.includes('\n') || text.length > 140;
+
+/** Message body as an accordion: a one-line preview by default, the full text on click.
+ *  Short one-liners render as-is — a toggle that reveals nothing is just noise. */
+function CollapsibleText({
+  text,
+  expandAll,
+  revealV = 0,
+  preview,
+}: {
+  text: string;
+  expandAll: { open: boolean; v: number };
+  /** Bumped by the page to force this message open (permalink, find, prompt stepper). */
+  revealV?: number;
+  /** Replaces the first-line preview (e.g. injected skill bodies). */
+  preview?: string;
+}) {
+  const [open, setOpen] = useState(expandAll.open);
+  useEffect(() => setOpen(expandAll.open), [expandAll.v]);
+  useEffect(() => {
+    if (revealV) setOpen(true);
+  }, [revealV]);
+  if (!isLong(text) && !preview) return <TurnText text={text} />;
+
+  if (!open) {
+    const firstLine = preview ?? text.split('\n').find((l) => l.trim()) ?? '';
+    return (
+      <button
+        type="button"
+        className="turn-preview"
+        aria-expanded={false}
+        title="Show full message"
+        onClick={() => setOpen(true)}
+      >
+        <Icon name="chevronRight" size={11} />
+        <span className="turn-preview-text">{firstLine.replace(/^`{3}.*$/, '(code)')}</span>
+      </button>
+    );
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="turn-collapse"
+        aria-expanded
+        onClick={() => setOpen(false)}
+      >
+        <Icon name="chevronDown" size={11} />
+        collapse
+      </button>
+      <TurnText text={text} />
+    </>
   );
 }
 
@@ -287,6 +613,7 @@ function TurnText({ text }: { text: string }) {
         return (
           <pre className="turn-code" key={i}>
             {lang && <span className="turn-code-lang">{lang}</span>}
+            <CopyButton text={code.replace(/\n$/, '')} />
             <code>{code.replace(/\n$/, '')}</code>
           </pre>
         );
@@ -298,8 +625,8 @@ function TurnText({ text }: { text: string }) {
 function ToolCallRow({ tc }: { tc: ToolCall }) {
   const [expanded, setExpanded] = useState(false);
 
-  return (
-    <div className="tool-call">
+  const row = (
+    <div className={`tool-call${tc.error ? ' failed' : ''}${tc.denied ? ' denied' : ''}`}>
       <span className="tc-name">{tc.name}</span>
       {tc.detail && <span className="tc-detail">{tc.detail}</span>}
       {tc.args && (
@@ -314,6 +641,110 @@ function ToolCallRow({ tc }: { tc: ToolCall }) {
           {tc.args}
         </button>
       )}
+      {(tc.error || tc.denied) && (
+        <span className="tc-status" title={tc.denied ? `Blocked before running (${tc.denied})` : 'The tool returned an error'}>
+          {tc.denied ? `denied · ${tc.denied}` : 'failed'}
+        </span>
+      )}
     </div>
+  );
+  if (!tc.questions && !tc.declined) return row;
+  return (
+    <div className="ask-block">
+      {row}
+      {tc.declined && <div className="ask-declined">User dismissed the question</div>}
+      {tc.questions?.map((q, i) => <AskedQuestionRow key={i} q={q} />)}
+    </div>
+  );
+}
+
+/** Which of the offered options the answer picked, plus any text the user typed instead
+ *  ("Other"). Claude Code joins multiSelect picks with ", ", so labels are matched against both
+ *  the whole answer and its comma-split parts. */
+function splitAnswer(q: AskedQuestion): { picked: Set<string>; custom?: string } {
+  const picked = new Set<string>();
+  if (!q.answer) return { picked };
+  if (q.options.includes(q.answer)) return { picked: new Set([q.answer]) };
+  const rest: string[] = [];
+  for (const part of q.answer.split(', ')) {
+    if (q.options.includes(part)) picked.add(part);
+    else rest.push(part);
+  }
+  return { picked, custom: rest.length ? rest.join(', ') : undefined };
+}
+
+/** One AskUserQuestion question: a one-line "header → answer" summary that opens to the full
+ *  question, every offered option (picked ones marked), and the user's note. */
+function AskedQuestionRow({ q }: { q: AskedQuestion }) {
+  const [open, setOpen] = useState(false);
+  const { picked, custom } = splitAnswer(q);
+  return (
+    <div className={`ask-q${open ? ' open' : ''}`}>
+      <button
+        type="button"
+        className="ask-q-head"
+        aria-expanded={open}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <Icon name={open ? 'chevronDown' : 'chevronRight'} size={11} />
+        <span className="ask-q-label">{q.header || q.question}</span>
+        <span className={`ask-q-answer${q.answer ? '' : ' none'}`}>
+          {q.answer ?? 'no answer'}
+        </span>
+        {q.notes && <span className="ask-q-flag">note</span>}
+      </button>
+      {open && (
+        <div className="ask-q-body">
+          <div className="ask-q-question">{q.question}</div>
+          {q.options.length > 0 && (
+            <ul className="ask-q-options">
+              {q.options.map((o) => (
+                <li key={o} className={picked.has(o) ? 'picked' : undefined}>
+                  <Icon name={picked.has(o) ? 'check' : 'dot'} size={11} />
+                  {o}
+                </li>
+              ))}
+              {custom && (
+                <li className="picked custom">
+                  <Icon name="check" size={11} />
+                  <span>
+                    <em>Other:</em> {custom}
+                  </span>
+                </li>
+              )}
+            </ul>
+          )}
+          {q.notes && (
+            <blockquote className="ask-q-notes">
+              <span className="ask-q-notes-label">Note</span>
+              {q.notes}
+            </blockquote>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      className="code-copy"
+      aria-label="Copy code"
+      onClick={async () => {
+        try {
+          await navigator.clipboard.writeText(text);
+          setDone(true);
+          setTimeout(() => setDone(false), 1500);
+        } catch {
+          // clipboard blocked (insecure context / permissions) — nothing useful to do
+        }
+      }}
+    >
+      <Icon name={done ? 'check' : 'copy'} size={11} />
+      {done ? 'Copied' : 'Copy'}
+    </button>
   );
 }

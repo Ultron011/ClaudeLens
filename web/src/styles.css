@@ -1079,6 +1079,201 @@ code { font-family: var(--mono); font-size: 0.86em; }
 .tc-args:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs); }
 .tc-args.expanded { white-space: pre-wrap; overflow-wrap: anywhere; text-overflow: clip; }
 
+/* Message accordion. Collapsed, a long message is its first line, ellipsized, as a button — the
+ * bubble keeps its width so the conversation's shape still reads. */
+/* Sticky under the topbar so find / prompt-jump work from anywhere in a 1,500-turn transcript.
+ * No ancestor of this may get a non-visible overflow — see gotchas.md §4 (sticky re-parenting). */
+.transcript-bar {
+  position: sticky; top: var(--topbar-h); z-index: var(--z-sticky);
+  display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--s2);
+  margin: 0 calc(-1 * var(--s2)) var(--s3); padding: var(--s2);
+  background: color-mix(in srgb, var(--bg) 88%, transparent); backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--border-soft);
+}
+.transcript-bar-actions { display: flex; align-items: center; gap: var(--s1); }
+.prompt-nav-label { font-size: var(--fs-xs); margin-right: var(--s1); }
+.transcript-find {
+  display: flex; align-items: center; gap: var(--s1); flex: 1 1 260px; max-width: 420px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 2px 4px 2px 10px; color: var(--text-faint);
+}
+.transcript-find:focus-within { border-color: var(--accent-line); }
+.transcript-find input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none;
+  font: inherit; font-size: var(--fs-sm); color: var(--text); padding: 4px 0;
+}
+.transcript-find .chip.icon { padding: 3px 6px; border-color: transparent; background: none; }
+.find-count { font-size: var(--fs-xs); color: var(--text-faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+
+/* Off-screen turns skip layout/paint: a 1,538-turn session took ~1.8 s to render without it. */
+.turn { content-visibility: auto; contain-intrinsic-size: auto 90px; scroll-margin-top: calc(var(--topbar-h) + 64px); }
+.turn.matched .turn-bubble { outline: 1px dashed var(--accent-line); outline-offset: 2px; }
+.turn.current .turn-bubble { outline: 2px solid var(--accent); outline-offset: 2px; }
+.turn:target .turn-bubble { outline: 2px solid var(--accent-line); outline-offset: 2px; }
+.turn-bubble { position: relative; }
+/* Per-message time + permalink, quiet until hovered. Absolutely placed in the bubble's bottom
+ * padding — NOT floated: text wrapping around 1,500 floats made "Expand all" ~1 s slower. */
+.turn-stamp {
+  position: absolute; right: 6px; bottom: 0;
+  display: inline-flex; align-items: center; gap: 3px;
+  background: none; border: none; padding: 2px 4px; border-radius: var(--r-xs); cursor: pointer;
+  font-family: var(--mono); font-size: var(--fs-2xs); color: var(--text-faint); opacity: 0.55;
+}
+.turn-stamp svg { opacity: 0; transition: opacity var(--t-fast) var(--ease); }
+.turn-bubble:hover .turn-stamp, .turn-stamp:focus-visible { opacity: 1; }
+.turn-bubble:hover .turn-stamp svg, .turn-stamp:focus-visible svg { opacity: 1; }
+.turn-stamp:hover { color: var(--accent); background: var(--accent-soft); }
+/* Injected skill bodies: a user-role turn nobody typed — muted, not a speech bubble. */
+.turn.injected .turn-bubble { background: var(--bg-sunken); border-style: dashed; border-color: var(--border); }
+.turn.injected .turn-preview { color: var(--text-dim); font-size: var(--fs-sm); }
+
+/* Copy button on fenced code — visible on hover/focus so it never covers code at rest. */
+.turn-code { position: relative; }
+.code-copy {
+  position: absolute; top: 6px; right: 6px; display: inline-flex; align-items: center; gap: 4px;
+  background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--r-xs);
+  padding: 2px 6px; font: inherit; font-family: var(--font); font-size: var(--fs-2xs);
+  color: var(--text-dim); cursor: pointer; opacity: 0; transition: opacity var(--t-fast) var(--ease);
+}
+.turn-code:hover .code-copy, .code-copy:focus-visible { opacity: 1; }
+@media (hover: none) { .code-copy { opacity: 1; } }
+
+/* Tool call outcome. */
+.tool-call.failed { border-color: color-mix(in srgb, var(--danger) 45%, var(--border-soft)); }
+.tool-call.denied { border-style: dashed; }
+.tc-status {
+  grid-column: 4; font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.04em;
+  padding: 1px 6px; border-radius: var(--r-xs); white-space: nowrap;
+  color: var(--danger); background: var(--danger-soft);
+}
+.tool-call.denied .tc-status { color: var(--warning); background: color-mix(in srgb, var(--warning) 14%, transparent); }
+.pill.pill-error { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); background: var(--danger-soft); }
+.fail-rate { color: var(--text-faint); font-size: 0.9em; }
+.fail-rate.high { color: var(--danger); }
+
+.link-btn {
+  background: none; border: none; padding: 0; font: inherit; color: var(--accent);
+  text-decoration: underline; text-underline-offset: 2px; cursor: pointer;
+}
+.empty.compact { padding: var(--s5) var(--s4); gap: var(--s2); }
+
+/* Global search in the topbar. */
+.topbar-search {
+  display: flex; align-items: center; gap: 6px; width: 220px;
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 0 10px; color: var(--text-faint);
+  transition: border-color var(--t-fast) var(--ease), width var(--t) var(--ease);
+}
+.topbar-search:focus-within { border-color: var(--accent-line); width: 280px; }
+.topbar-search input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none; padding: 6px 0;
+  font: inherit; font-size: var(--fs-md); color: var(--text);
+}
+@media (max-width: 720px) {
+  .topbar-search { width: 100%; order: -1; }
+  .topbar-search:focus-within { width: 100%; }
+  .transcript-bar { top: 0; }
+  .transcript-find { max-width: none; }
+}
+
+/* Filters row on /search. */
+.filter-bar { display: flex; flex-wrap: wrap; align-items: center; gap: var(--s2); margin-bottom: var(--s4); }
+.filter { display: inline-flex; align-items: center; gap: 6px; font-size: var(--fs-sm); color: var(--text-dim); }
+.filter select, .inline-filter {
+  font: inherit; font-size: var(--fs-md); color: var(--text);
+  background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--r-md);
+  padding: 5px 8px;
+}
+.inline-filter { width: 180px; }
+.filter select:focus-visible, .inline-filter:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* Faint caret on sortable-but-idle headers so sortability is discoverable. */
+.sort-arrow.idle { opacity: 0.25; }
+.th-sort:hover .sort-arrow.idle { opacity: 0.6; }
+
+.confirm-error { color: var(--danger); font-size: var(--fs-sm); margin: var(--s2) 0 0; }
+
+/* Toasts — bottom-right, above the mobile tab bar. */
+.toasts {
+  position: fixed; right: var(--s5); bottom: var(--s5); z-index: var(--z-toast);
+  display: flex; flex-direction: column; gap: var(--s2); pointer-events: none;
+}
+.toast {
+  pointer-events: auto; display: flex; align-items: center; gap: var(--s3); max-width: min(420px, 90vw);
+  background: var(--ink); color: var(--bg); border-radius: var(--r-md); box-shadow: var(--shadow-lg);
+  padding: 10px 12px 10px 14px; font-size: var(--fs-md); animation: toast-in var(--t) var(--ease);
+}
+.toast.error { background: var(--danger); color: #fff; }
+.toast-close {
+  margin-left: auto; background: none; border: none; color: inherit; opacity: 0.7;
+  font-size: 18px; line-height: 1; cursor: pointer; padding: 0 2px;
+}
+.toast-close:hover { opacity: 1; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } }
+@media (max-width: 720px) { .toasts { left: var(--s3); right: var(--s3); bottom: 76px; } }
+.turn-preview, .turn-collapse {
+  display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0;
+  background: none; border: none; padding: 0; margin: 0; cursor: pointer;
+  font: inherit; color: inherit; text-align: left;
+}
+.turn-preview { font-size: var(--fs-base); line-height: 1.7; color: var(--text); }
+.turn-preview > svg, .turn-collapse > svg { flex: none; color: var(--text-faint); }
+.turn-preview-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.turn-preview:hover .turn-preview-text { color: var(--text-dim); }
+.turn-collapse {
+  width: auto; margin-bottom: var(--s1); font-family: var(--mono); font-size: var(--fs-xs);
+  color: var(--text-faint);
+}
+.turn-collapse:hover { color: var(--text-dim); }
+.turn-preview:focus-visible, .turn-collapse:focus-visible, .ask-q-head:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px; border-radius: var(--r-xs);
+}
+
+/* AskUserQuestion: the tool row, then one "header → answer" line per question. */
+.ask-block {
+  display: flex; flex-direction: column; gap: 4px;
+}
+.ask-declined, .ask-q {
+  margin-left: var(--s3); padding-left: var(--s3); border-left: 2px solid var(--border-soft);
+  font-size: var(--fs-xs);
+}
+.ask-declined { color: var(--text-faint); font-style: italic; }
+.ask-q-head {
+  display: flex; align-items: center; gap: var(--s2); width: 100%; min-width: 0;
+  background: none; border: none; padding: 2px 0; cursor: pointer; text-align: left;
+  font: inherit; color: var(--text-dim);
+}
+.ask-q-head > svg { flex: none; color: var(--text-faint); }
+.ask-q-label { flex: none; max-width: 40%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ask-q-label::after { content: ' →'; color: var(--text-faint); }
+.ask-q-answer {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text); font-weight: 500;
+}
+.ask-q-answer.none { color: var(--text-faint); font-weight: 400; font-style: italic; }
+.ask-q.open .ask-q-answer { white-space: normal; }
+.ask-q-flag {
+  flex: none; font-size: var(--fs-2xs); text-transform: uppercase; letter-spacing: 0.05em;
+  color: var(--accent); border: 1px solid currentColor; border-radius: var(--r-xs); padding: 0 4px;
+}
+.ask-q-body { padding: var(--s1) 0 var(--s2) 19px; display: flex; flex-direction: column; gap: var(--s2); }
+.ask-q-question { color: var(--text); font-size: var(--fs-sm); white-space: pre-wrap; }
+.ask-q-options { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 3px; }
+.ask-q-options li { display: flex; align-items: baseline; gap: 6px; color: var(--text-faint); }
+.ask-q-options li > svg { flex: none; position: relative; top: 1px; }
+.ask-q-options li.picked { color: var(--text); font-weight: 500; }
+.ask-q-options li.picked > svg { color: var(--accent); }
+.ask-q-options li.custom em { font-style: normal; color: var(--text-dim); font-weight: 400; }
+.ask-q-notes {
+  margin: 0; padding: var(--s2) var(--s3); background: var(--bg-sunken);
+  border: 1px solid var(--border-soft); border-radius: var(--r-sm);
+  color: var(--text); white-space: pre-wrap;
+}
+.ask-q-notes-label {
+  display: block; margin-bottom: 2px; font-size: var(--fs-2xs); text-transform: uppercase;
+  letter-spacing: 0.05em; color: var(--text-faint);
+}
+
 /* ============================================================
    REDUCED MOTION — every animation has a still alternative
    ============================================================ */

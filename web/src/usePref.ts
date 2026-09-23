@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 
 export const RANGE_PRESETS: Record<string, number> = { '7d': 7, '30d': 30, '90d': 90 };
@@ -79,15 +79,16 @@ export function useDateRange() {
   const customFrom = params.get('from') ?? storedFrom ?? '';
   const customTo = params.get('to') ?? storedTo ?? '';
 
-  let from: Date, to: Date;
-  if (range === 'custom' && customFrom && customTo) {
-    from = new Date(customFrom + 'T00:00:00Z');
-    to = new Date(customTo + 'T23:59:59Z');
-  } else {
+  // Frozen per range selection: recomputing `to = now` every render made "Load more" page against
+  // a window that slid forward between requests (rows skipped or repeated at the boundary).
+  const { from, to } = useMemo(() => {
+    if (range === 'custom' && customFrom && customTo) {
+      return { from: new Date(customFrom + 'T00:00:00Z'), to: new Date(customTo + 'T23:59:59Z') };
+    }
     const days = RANGE_PRESETS[range] ?? 30;
-    to = new Date();
-    from = new Date(to.getTime() - days * 86_400_000);
-  }
+    const now = new Date();
+    return { from: new Date(now.getTime() - days * 86_400_000), to: now };
+  }, [range, customFrom, customTo]);
 
   const apply = (newRange: string, newFrom?: string, newTo?: string) => {
     try {

@@ -99,7 +99,8 @@ export interface ModelAnalytics {
   tz: 'UTC';
   totals: ModelAnalyticsTotals;
   models: ModelDetail[];
-  tools: Array<{ tool: string; uses: number }>;
+  /** errors: failed tool_results (parser v7+ sessions only — a floor until older rows re-sync). */
+  tools: Array<{ tool: string; uses: number; errors: number }>;
   permissionModes: Array<{ mode: string; sessions: number }>;
   authorModels: AuthorModelRow[];
 }
@@ -113,11 +114,66 @@ export interface ListSessionsParams {
   to?: string;
   limit?: number;
   offset?: number;
+  /** Matches title, note, author and project (substring). */
+  q?: string;
+  /** Also word-match `q` inside transcripts (server GIN index). */
+  inTranscript?: boolean;
+  featured?: boolean;
+  includeHidden?: boolean;
+  /** cost | turns | messages | tokens | recent | featured, optional `_asc` suffix. */
+  sort?: string;
+}
+
+/** One person's projects, aggregated server-side (GET /api/projects). */
+export interface ProjectRollup {
+  project: string;
+  sessions: number;
+  turns: number;
+  messages: number;
+  tokens: string | number;
+  cost: string | null;
+  lastActivity?: string;
+  skills: string[];
+}
+export interface ProjectsResponse {
+  totals: {
+    sessions: number;
+    projects: number;
+    turns: number;
+    messages: number;
+    tokens: string | number;
+    cost: string | null;
+  };
+  projects: ProjectRollup[];
+  skills: Array<{ skill: string; uses: number }>;
+}
+
+/** A failed API call with its HTTP status and the server's `{error}` message, so pages can say
+ *  "this session was deleted" instead of printing a raw `404 {"error":…}`. */
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function check(r: Response): Promise<Response> {
+  if (r.ok) return r;
+  let msg = r.statusText || `HTTP ${r.status}`;
+  try {
+    const body = (await r.json()) as { error?: string };
+    if (body?.error) msg = body.error;
+  } catch {
+    // non-JSON error body (proxy page, etc.) — keep the status text
+  }
+  if (r.status === 429) msg = 'Too many requests — slow down and try again in a moment';
+  throw new ApiError(r.status, msg);
 }
 
 async function get<T>(url: string, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(url, { signal });
-  if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+  const r = await check(await fetch(url, { signal }));
   return r.json() as Promise<T>;
 }
 
@@ -154,9 +210,29 @@ export function getAnalytics(
   from?: string,
   to?: string,
   signal?: AbortSignal,
-  sessionPage?: { limit?: number; offset?: number },
+  opts?: { limit?: number; offset?: number; sort?: string; project?: string },
 ): Promise<Analytics> {
-  return get(`/api/analytics?${qs({ identity, from, to, sessionLimit: sessionPage?.limit, sessionOffset: sessionPage?.offset })}`, signal);
+  return get(
+    `/api/analytics?${qs({
+      identity,
+      from,
+      to,
+      project: opts?.project,
+      sessionLimit: opts?.limit,
+      sessionOffset: opts?.offset,
+      sessionSort: opts?.sort,
+    })}`,
+    signal,
+  );
+}
+
+export function getProjects(
+  author: string,
+  from?: string,
+  to?: string,
+  signal?: AbortSignal,
+): Promise<ProjectsResponse> {
+  return get(`/api/projects?${qs({ author, from, to })}`, signal);
 }
 
 export async function patchSession(
@@ -168,19 +244,17 @@ export async function patchSession(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify(body),
   });
-  if (!r.ok) throw new Error(await r.text());
+  await check(r);
   return r.json();
 }
 
 export async function deleteSession(id: string): Promise<void> {
-  const r = await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
-  if (!r.ok) throw new Error(await r.text());
+  await check(await fetch(`/api/sessions/${id}`, { method: 'DELETE' }));
 }
 
 export async function deleteProject(author: string, project: string): Promise<number> {
   const q = new URLSearchParams({ author, project });
-  const r = await fetch(`/api/projects?${q}`, { method: 'DELETE' });
-  if (!r.ok) throw new Error(await r.text());
+  const r = await check(await fetch(`/api/projects?${q}`, { method: 'DELETE' }));
   const { deleted } = (await r.json()) as { deleted: number };
   return deleted;
 }

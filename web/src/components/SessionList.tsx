@@ -3,7 +3,26 @@ import type { SessionSummary } from '@claudelens/shared';
 import { fmtDate, fmtTokens, fmtCost, msgCount } from '../format.js';
 import { Stat } from './Stat.js';
 import { Icon } from './Icon.js';
-import { DataTable, type Column } from './DataTable.js';
+import { DataTable, type Column, type SortState } from './DataTable.js';
+
+/** Table column key → server `sort` param (GET /api/sessions, /api/analytics sessionSort). */
+const SERVER_SORT: Record<string, string> = {
+  started: 'recent',
+  messages: 'messages',
+  tokens: 'tokens',
+  cost: 'cost',
+};
+
+/** `sort` param ⇄ table sort state. `recent` (newest first) is the default. */
+export function sortParamToState(sort: string | undefined): SortState | null {
+  if (!sort) return null;
+  const asc = sort.endsWith('_asc');
+  const base = sort.replace(/_asc$/, '');
+  const key = Object.keys(SERVER_SORT).find((k) => SERVER_SORT[k] === base);
+  return key ? { key, dir: asc ? 'asc' : 'desc' } : null;
+}
+export const sortStateToParam = (s: SortState) =>
+  SERVER_SORT[s.key] + (s.dir === 'asc' ? '_asc' : '');
 
 export interface SessionListProps {
   sessions: SessionSummary[];
@@ -11,18 +30,30 @@ export interface SessionListProps {
   onDelete: (s: SessionSummary) => void;
   /** Show the Project column/meta — only meaningful when the list spans projects. */
   showProject?: boolean;
+  /** Server-side sort for paginated lists: only started/messages/tokens/cost stay sortable. */
+  serverSort?: { value?: string; onChange: (sort: string) => void };
 }
 
 /** Card-vs-table branch for a list of sessions, shared by ProjectPage and UserPage's flat view. */
-export function SessionList({ sessions, layout, onDelete, showProject = false }: SessionListProps) {
+export function SessionList({ sessions, layout, onDelete, showProject = false, serverSort }: SessionListProps) {
   if (layout === 'table') {
-    const columns: Column<SessionSummary>[] = [
+    const allColumns: Column<SessionSummary>[] = [
       {
         key: 'title',
         header: 'Title',
         sortable: true,
         sortValue: (s) => s.title,
-        render: (s) => <Link to={`/session/${s.id}`}>{s.title}</Link>,
+        render: (s) => (
+          <>
+            {s.featured && (
+              <span className="star" title="Featured">
+                <Icon name="star" size={11} filled />{' '}
+              </span>
+            )}
+            <Link to={`/session/${s.id}`}>{s.title}</Link>
+            {s.hidden && <span className="badge-hidden"> hidden</span>}
+          </>
+        ),
       },
       ...(showProject
         ? [
@@ -89,8 +120,22 @@ export function SessionList({ sessions, layout, onDelete, showProject = false }:
         ),
       },
     ];
+    // Server-sorted lists can only order by what the server knows how to ORDER BY.
+    const columns = serverSort
+      ? allColumns.map((c) => ({ ...c, sortable: c.sortable && c.key in SERVER_SORT }))
+      : allColumns;
     return (
-      <DataTable columns={columns} rows={sessions} rowKey={(s) => s.id} caption="Sessions" ariaLabel="Sessions" />
+      <DataTable
+        columns={columns}
+        rows={sessions}
+        rowKey={(s) => s.id}
+        caption="Sessions"
+        ariaLabel="Sessions"
+        {...(serverSort && {
+          sort: sortParamToState(serverSort.value),
+          onSortChange: (st: SortState) => serverSort.onChange(sortStateToParam(st)),
+        })}
+      />
     );
   }
 

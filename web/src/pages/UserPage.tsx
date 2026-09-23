@@ -1,8 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link, useParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link, useLocation, useParams } from 'react-router-dom';
 import type { SessionSummary } from '@claudelens/shared';
-import { listSessions, deleteProject, deleteSession } from '../api.js';
-import { fmtDate, fmtCost, fmtTokens, msgCount } from '../format.js';
+import { getProjects, deleteProject, deleteSession, type ProjectsResponse } from '../api.js';
+import { fmtDate, fmtCost, fmtTokens } from '../format.js';
 import { Shell } from '../components/Shell.js';
 import { Stat } from '../components/Stat.js';
 import { Kpi, KpiSkeleton } from '../components/Kpi.js';
@@ -12,10 +12,10 @@ import { ViewToggle } from '../components/ViewToggle.js';
 import { SessionList } from '../components/SessionList.js';
 import { DataTable, type Column } from '../components/DataTable.js';
 import { DateRangePicker } from '../components/DateRangePicker.js';
+import { useOrgStats } from '../components/AppLayout.js';
 import { useFetch } from '../useFetch.js';
 import { useDateRange, usePref, useLayoutPref } from '../usePref.js';
-
-const LIMIT = 50;
+import { usePagedSessions } from '../usePagedSessions.js';
 
 interface ProjectGroup {
   project: string;
@@ -24,96 +24,81 @@ interface ProjectGroup {
   messages: number;
   tokens: number;
   cost: number;
-  skills: Set<string>;
+  skills: string[];
   lastActivity?: string;
 }
 
 export function UserPage() {
   const { author = '' } = useParams<{ author: string }>();
+  const { search } = useLocation();
   const [viewRaw, setView] = usePref('view', 'grouped');
   const view = viewRaw === 'flat' ? 'flat' : 'grouped';
   const [layout, setLayout] = useLayoutPref();
   const { range, from, to, customFrom, customTo, apply } = useDateRange();
+  const [sort, setSort] = usePref('sort', 'recent');
+  const [projectFilter, setProjectFilter] = useState('');
+  const { stats } = useOrgStats();
+  // Show the display name the rest of the UI uses; the raw author string stays in URLs.
+  const label = stats?.authors.find((a) => a.author === author)?.label ?? author;
 
+  const fromIso = from.toISOString();
+  const toIso = to.toISOString();
+
+  // Every KPI, project row and skill count is aggregated server-side. This page used to fold a
+  // 500-row fetch client-side, which silently understated the heaviest users (1,267 sessions).
   const {
-    data: rows,
+    data: rollup,
     err,
     refetch,
-  } = useFetch<SessionSummary[]>(
-    (signal) => listSessions({ author, limit: 500, from: from.toISOString(), to: to.toISOString() }, signal),
-    [author, range, customFrom, customTo],
+  } = useFetch<ProjectsResponse>(
+    (signal) => getProjects(author, fromIso, toIso, signal),
+    [author, fromIso, toIso],
   );
   const [pending, setPending] = useState<ProjectGroup | null>(null);
 
-  // Flat view: a separate paginated fetch — grouped view keeps the full client-side grouping
-  // below, flat view pages through listSessions with limit/offset.
-  const [flatRows, setFlatRows] = useState<SessionSummary[]>([]);
-  const [flatOffset, setFlatOffset] = useState(0);
-  const [flatDone, setFlatDone] = useState(false);
-  const [flatLoaded, setFlatLoaded] = useState(false);
+  const flatQuery = { author, from: fromIso, to: toIso, sort };
+  const flat = usePagedSessions(flatQuery, view === 'flat' ? JSON.stringify(flatQuery) : 'off');
   const [pendingSession, setPendingSession] = useState<SessionSummary | null>(null);
-
-  useEffect(() => {
-    setFlatRows([]);
-    setFlatOffset(0);
-    setFlatDone(false);
-    setFlatLoaded(false);
-  }, [author, view, range, customFrom, customTo]);
-
-  useEffect(() => {
-    if (view !== 'flat') return;
-    const ac = new AbortController();
-    listSessions({ author, limit: LIMIT, offset: flatOffset, from: from.toISOString(), to: to.toISOString() }, ac.signal)
-      .then((page) => {
-        setFlatRows((prev) => (flatOffset === 0 ? page : [...prev, ...page]));
-        setFlatDone(page.length < LIMIT);
-        setFlatLoaded(true);
-      })
-      .catch(() => setFlatLoaded(true));
-    return () => ac.abort();
-  }, [author, view, flatOffset, range, customFrom, customTo]);
 
   async function confirmDeleteSession() {
     if (!pendingSession) return;
     await deleteSession(pendingSession.id);
-    setFlatRows((prev) => prev.filter((s) => s.id !== pendingSession.id));
+    flat.remove(pendingSession.id);
     setPendingSession(null);
+    refetch();
   }
 
-  const groups = useMemo<ProjectGroup[]>(() => {
-    if (!rows) return [];
-    const m = new Map<string, ProjectGroup>();
-    for (const s of rows) {
-      const key = s.project || '(no project)';
-      const g =
-        m.get(key) ??
-        { project: key, sessions: 0, turns: 0, messages: 0, tokens: 0, cost: 0, skills: new Set() };
-      g.sessions += 1;
-      g.turns += s.stats.turns;
-      g.messages += msgCount(s.stats);
-      g.tokens += s.stats.totalTokens;
-      g.cost += s.stats.estimatedCostUsd ?? 0;
-      s.stats.skills.forEach((sk) => g.skills.add(sk));
-      const when = s.startedAt ?? s.createdAt;
-      if (!g.lastActivity || when > g.lastActivity) g.lastActivity = when;
-      m.set(key, g);
-    }
-    return [...m.values()].sort((a, b) => b.sessions - a.sessions);
-  }, [rows]);
+  const groups = useMemo<ProjectGroup[]>(
+    () =>
+      (rollup?.projects ?? []).map((p) => ({
+        project: p.project,
+        sessions: p.sessions,
+        turns: p.turns,
+        messages: p.messages,
+        tokens: Number(p.tokens) || 0,
+        cost: Number(p.cost) || 0,
+        skills: p.skills,
+        lastActivity: p.lastActivity,
+      })),
+    [rollup],
+  );
+  const shownGroups = projectFilter
+    ? groups.filter((g) => g.project.toLowerCase().includes(projectFilter.toLowerCase()))
+    : groups;
 
-  const summary = useMemo(() => {
-    const sessions = rows?.length ?? 0;
-    const turns = rows?.reduce((n, s) => n + s.stats.turns, 0) ?? 0;
-    const messages = rows?.reduce((n, s) => n + msgCount(s.stats), 0) ?? 0;
-    const tokens = rows?.reduce((n, s) => n + s.stats.totalTokens, 0) ?? 0;
-    const cost = rows?.reduce((n, s) => n + (s.stats.estimatedCostUsd ?? 0), 0) ?? 0;
-    const skills = new Map<string, number>();
-    rows?.forEach((s) => s.stats.skills.forEach((sk) => skills.set(sk, (skills.get(sk) ?? 0) + 1)));
-    const topSkills = [...skills.entries()].sort((a, b) => b[1] - a[1]);
-    return { sessions, turns, messages, tokens, cost, projects: groups.length, topSkills };
-  }, [rows, groups.length]);
+  const t = rollup?.totals;
+  const summary = {
+    sessions: t?.sessions ?? 0,
+    turns: t?.turns ?? 0,
+    messages: t?.messages ?? 0,
+    tokens: Number(t?.tokens) || 0,
+    cost: Number(t?.cost) || 0,
+    projects: t?.projects ?? 0,
+    topSkills: (rollup?.skills ?? []).map((s) => [s.skill, s.uses] as [string, number]),
+  };
 
   const maxSkill = Math.max(1, ...summary.topSkills.map((s) => s[1]));
+  const projectHref = (p: string) => `/u/${encodeURIComponent(author)}/${encodeURIComponent(p)}${search}`;
 
   async function confirmDeleteProject() {
     if (!pending) return;
@@ -124,7 +109,7 @@ export function UserPage() {
 
   return (
     <Shell
-      crumbs={[{ label: author }]}
+      crumbs={[{ label }]}
       actions={
         <>
           <Link to={`/analytics/u/${encodeURIComponent(author)}`} className="chip">
@@ -141,7 +126,7 @@ export function UserPage() {
             {author.slice(0, 1).toUpperCase()}
           </span>
           <div>
-            <h1>{author}</h1>
+            <h1>{label}</h1>
             <p className="entity-sub">
               {summary.projects} {summary.projects === 1 ? 'project' : 'projects'} ·{' '}
               {summary.sessions} {summary.sessions === 1 ? 'session' : 'sessions'}
@@ -151,7 +136,7 @@ export function UserPage() {
       </div>
 
       <div className="kpi-row">
-        {!rows ? (
+        {!rollup ? (
           <>
             <KpiSkeleton label="Sessions" />
             <KpiSkeleton label="Messages" />
@@ -168,7 +153,7 @@ export function UserPage() {
               foot={`${summary.turns.toLocaleString()} Claude turns back`}
             />
             <Kpi label="Tokens" icon="layers" value={fmtTokens(summary.tokens)} foot="input + output + cache" />
-            <Kpi label="Cost" icon="coin" value={fmtCost(summary.cost)} foot="from the transcript" />
+            <Kpi label="Cost" icon="coin" value={fmtCost(summary.cost)} foot="estimated from tokens" />
           </>
         )}
       </div>
@@ -180,11 +165,21 @@ export function UserPage() {
               <h4>{view === 'grouped' ? 'Projects' : 'All sessions'}</h4>
               <p className="panel-sub">
                 {view === 'grouped'
-                  ? `Projects ${author} has worked in. Open one to see its sessions.`
-                  : `Every session ${author} has run, newest first.`}
+                  ? `Projects ${label} worked in during this range. Open one to see its sessions.`
+                  : `Every session ${label} ran in this range.`}
               </p>
             </div>
             <div className="controls" style={{ margin: 0 }}>
+              {view === 'grouped' && groups.length > 8 && (
+                <input
+                  type="search"
+                  className="inline-filter"
+                  placeholder="Filter projects…"
+                  aria-label="Filter projects"
+                  value={projectFilter}
+                  onChange={(e) => setProjectFilter(e.target.value)}
+                />
+              )}
               <ViewToggle
                 label="View"
                 value={view}
@@ -213,20 +208,22 @@ export function UserPage() {
               <p className="muted">{err}</p>
             </div>
           ) : view === 'grouped' ? (
-            !rows ? (
+            !rollup ? (
               <div className="skel" style={{ height: 260, borderRadius: 'var(--r-lg)' }} />
             ) : groups.length === 0 ? (
-              <EmptyForAuthor author={author} />
+              <EmptyForAuthor author={label} />
+            ) : shownGroups.length === 0 ? (
+              <p className="muted">No project matches “{projectFilter}”.</p>
             ) : layout === 'table' ? (
-              <ProjectTable groups={groups} author={author} onDelete={setPending} />
+              <ProjectTable groups={shownGroups} href={projectHref} onDelete={setPending} />
             ) : (
               <div className="grid">
-                {groups.map((g) => (
+                {shownGroups.map((g) => (
                   <article key={g.project} className="card">
                     <Link
                       className="card-link"
                       aria-label={g.project}
-                      to={`/u/${encodeURIComponent(author)}/${encodeURIComponent(g.project)}`}
+                      to={projectHref(g.project)}
                     />
                     <div className="card-content">
                       <div className="card-head">
@@ -239,11 +236,11 @@ export function UserPage() {
                       </div>
                       <div className="card-meta">
                         <span>last active {fmtDate(g.lastActivity)}</span>
-                        {g.skills.size > 0 && (
+                        {g.skills.length > 0 && (
                           <>
                             <span className="dot">·</span>
                             <span>
-                              {g.skills.size} {g.skills.size === 1 ? 'skill' : 'skills'}
+                              {g.skills.length} {g.skills.length === 1 ? 'skill' : 'skills'}
                             </span>
                           </>
                         )}
@@ -272,27 +269,29 @@ export function UserPage() {
                 ))}
               </div>
             )
-          ) : !flatLoaded ? (
+          ) : flat.err ? (
+            <div className="empty">
+              <Icon name="cpu" size={22} className="empty-icon" />
+              <h3>Can’t load sessions</h3>
+              <p className="muted">{flat.err}</p>
+            </div>
+          ) : !flat.loaded ? (
             <div className="skel" style={{ height: 260, borderRadius: 'var(--r-lg)' }} />
-          ) : flatRows.length === 0 ? (
-            <EmptyForAuthor author={author} />
+          ) : flat.sessions.length === 0 ? (
+            <EmptyForAuthor author={label} />
           ) : (
             <>
               <SessionList
-                sessions={flatRows}
+                sessions={flat.sessions}
                 layout={layout}
                 showProject
                 onDelete={(s) => setPendingSession(s)}
+                serverSort={{ value: sort, onChange: setSort }}
               />
-              {!flatDone && (
+              {!flat.done && (
                 <div className="load-more">
-                  <button
-                    type="button"
-                    className="chip"
-                    disabled={!flatLoaded}
-                    onClick={() => setFlatOffset((o) => o + LIMIT)}
-                  >
-                    {flatLoaded ? 'Load more' : 'Loading…'}
+                  <button type="button" className="chip" disabled={flat.loading} onClick={flat.loadMore}>
+                    {flat.loading ? 'Loading…' : 'Load more'}
                   </button>
                 </div>
               )}
@@ -329,8 +328,8 @@ export function UserPage() {
         title={`Delete project “${pending?.project ?? ''}”?`}
         body={
           <>
-            This permanently deletes all {pending?.sessions ?? 0} session(s) in “{pending?.project}”
-            by {author}. This cannot be undone.
+            This permanently deletes every session in “{pending?.project}” by {label} — across all
+            dates, not just the selected range. This cannot be undone.
           </>
         }
         typeToConfirm={pending?.project}
@@ -363,11 +362,11 @@ function EmptyForAuthor({ author }: { author: string }) {
 
 function ProjectTable({
   groups,
-  author,
+  href,
   onDelete,
 }: {
   groups: ProjectGroup[];
-  author: string;
+  href: (project: string) => string;
   onDelete: (g: ProjectGroup) => void;
 }) {
   const columns: Column<ProjectGroup>[] = [
@@ -377,7 +376,7 @@ function ProjectTable({
       sortable: true,
       sortValue: (g) => g.project,
       render: (g) => (
-        <Link className="mono" to={`/u/${encodeURIComponent(author)}/${encodeURIComponent(g.project)}`}>
+        <Link className="mono" to={href(g.project)}>
           {g.project}
         </Link>
       ),
