@@ -27,21 +27,42 @@ function costForUsage(model, usage) {
   const p = priceFor(model);
   const inTok = usage.input_tokens ?? 0;
   const outTok = usage.output_tokens ?? 0;
-  const cWrite = usage.cache_creation_input_tokens ?? 0;
   const cRead = usage.cache_read_input_tokens ?? 0;
-  return (inTok * p.input + outTok * p.output + cWrite * p.cacheWrite + cRead * p.cacheRead) / 1e6;
+  const split = usage.cache_creation;
+  const has1h = typeof split?.ephemeral_1h_input_tokens === "number";
+  const has5m = typeof split?.ephemeral_5m_input_tokens === "number";
+  const w1h = has1h ? split.ephemeral_1h_input_tokens : 0;
+  const w5m = has5m || has1h ? split?.ephemeral_5m_input_tokens ?? 0 : usage.cache_creation_input_tokens ?? 0;
+  const searches = usage.server_tool_use?.web_search_requests ?? 0;
+  return (inTok * p.input + outTok * p.output + cRead * p.cacheRead + w5m * p.input * CACHE_WRITE_5M + w1h * p.input * CACHE_WRITE_1H) / 1e6 + searches * WEB_SEARCH_USD;
 }
-var TABLE, DEFAULT;
+var CACHE_WRITE_5M, CACHE_WRITE_1H, WEB_SEARCH_USD, TABLE, DEFAULT;
 var init_pricing = __esm({
   "../shared/src/pricing.ts"() {
     "use strict";
+    CACHE_WRITE_5M = 1.25;
+    CACHE_WRITE_1H = 2;
+    WEB_SEARCH_USD = 10 / 1e3;
     TABLE = [
-      ["opus", { input: 15, output: 75, cacheWrite: 18.75, cacheRead: 1.5 }],
-      ["sonnet", { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 }],
-      ["haiku", { input: 0.8, output: 4, cacheWrite: 1, cacheRead: 0.08 }],
-      ["fable", { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 }]
+      // Legacy Opus generations kept the old $15/$75 price.
+      ["claude-3-opus", { input: 15, output: 75, cacheRead: 1.5 }],
+      ["opus-4-1", { input: 15, output: 75, cacheRead: 1.5 }],
+      ["opus-4-0", { input: 15, output: 75, cacheRead: 1.5 }],
+      ["opus-4-2025", { input: 15, output: 75, cacheRead: 1.5 }],
+      // claude-opus-4-20250514
+      ["opus-5-5", { input: 4, output: 20, cacheRead: 0.2 }],
+      ["opus", { input: 5, output: 25, cacheRead: 0.5 }],
+      // opus 4.5+ and opus 5
+      ["fable", { input: 10, output: 50, cacheRead: 0.25 }],
+      ["sonnet-5", { input: 2, output: 10, cacheRead: 0.2 }],
+      ["sonnet", { input: 3, output: 15, cacheRead: 0.3 }],
+      // sonnet 3.x / 4.x
+      ["claude-3-haiku", { input: 0.25, output: 1.25, cacheRead: 0.03 }],
+      ["3-5-haiku", { input: 0.8, output: 4, cacheRead: 0.08 }],
+      ["haiku", { input: 1, output: 5, cacheRead: 0.1 }]
+      // haiku 4.5+
     ];
-    DEFAULT = { input: 3, output: 15, cacheWrite: 3.75, cacheRead: 0.3 };
+    DEFAULT = { input: 3, output: 15, cacheRead: 0.3 };
   }
 });
 
@@ -51,6 +72,8 @@ function redactText(input) {
   const hits = {};
   for (const rule of RULES) {
     text = text.replace(rule.re, (...args) => {
+      const match = args[0];
+      if (match.includes("\xABREDACTED\xBB")) return match;
       hits[rule.name] = (hits[rule.name] ?? 0) + 1;
       if (rule.name === "assignment") {
         const [, key, sep2] = args;
@@ -148,12 +171,41 @@ function toolDetail(name, input) {
 function cleanUserText(text) {
   return text.replace(INJECTED_BLOCK, "").replace(CAVEAT, "").replace(INJECTED_TAG, "").trim();
 }
+function askedQuestions(input) {
+  if (!Array.isArray(input?.questions)) return void 0;
+  const out = [];
+  for (const q of input.questions) {
+    if (typeof q?.question !== "string") continue;
+    out.push({
+      question: q.question,
+      header: typeof q.header === "string" ? q.header : void 0,
+      options: Array.isArray(q.options) ? q.options.map((o) => typeof o?.label === "string" ? o.label : "").filter(Boolean) : [],
+      multiSelect: q.multiSelect === true || void 0
+    });
+  }
+  return out.length ? out : void 0;
+}
+function applyAnswers(tc, result, isError) {
+  const r = result && typeof result === "object" ? result : void 0;
+  const answers = r?.answers;
+  const notes = r?.annotations;
+  if (!answers || typeof answers !== "object") {
+    if (isError) tc.declined = true;
+    return;
+  }
+  for (const q of tc.questions ?? []) {
+    const a = answers[q.question];
+    if (typeof a === "string" && a) q.answer = a;
+    const n = notes?.[q.question]?.notes;
+    if (typeof n === "string" && n.trim()) q.notes = n.trim();
+  }
+}
 function basename(p) {
   if (!p) return void 0;
   const parts = p.replace(/\/+$/, "").split("/");
   return parts[parts.length - 1] || void 0;
 }
-function parseTranscript(jsonl) {
+function parseLines(jsonl) {
   const entries = [];
   for (const line of jsonl.split("\n")) {
     const t = line.trim();
@@ -163,18 +215,38 @@ function parseTranscript(jsonl) {
     } catch {
     }
   }
+  return entries;
+}
+function plainText(content) {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content.filter((b) => b?.type === "text" && typeof b.text === "string").map((b) => b.text).join("\n\n");
+}
+function parseTranscript(jsonl, opts = {}) {
+  const entries = parseLines(jsonl);
   const turns = [];
   const toolUsage = {};
+  const toolErrors = {};
+  const toolDenials = {};
   const skills = /* @__PURE__ */ new Set();
   const subagents = /* @__PURE__ */ new Set();
   const models = /* @__PURE__ */ new Set();
   const modelUsage = {};
   const daily = {};
+  const callsById = /* @__PURE__ */ new Map();
+  const agentTypeById = /* @__PURE__ */ new Map();
+  const seenUsage = /* @__PURE__ */ new Set();
+  const turnByMessage = /* @__PURE__ */ new Map();
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
   let estimatedCostUsd = 0;
+  let interrupts = 0;
+  let compactions = 0;
+  let apiErrors = 0;
+  let rateLimitHits = 0;
+  const costRuns = /* @__PURE__ */ new Map();
   let sessionId = "";
   let cwd;
   let gitBranch;
@@ -182,10 +254,39 @@ function parseTranscript(jsonl) {
   let title = "";
   let firstUserPrompt;
   const timestamps = [];
-  const ensureModel = (m) => modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true };
+  const ensureModel = (m) => modelUsage[m] ??= { turns: 0, totalTokens: 0, costUsd: 0, activeMs: 0, measured: true, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
   const ensureDay = (d) => daily[d] ??= { turns: 0, userMessages: 0, totalTokens: 0, costUsd: 0, activeMs: 0 };
+  const addUsage = (e, model) => {
+    const u = e.message?.usage;
+    const key = e.message?.id ?? e.requestId;
+    if (!u || key && seenUsage.has(key)) return { tokens: 0, cost: 0 };
+    if (key) seenUsage.add(key);
+    const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    const cost = costForUsage(model, u);
+    inputTokens += u.input_tokens ?? 0;
+    outputTokens += u.output_tokens ?? 0;
+    cacheReadTokens += u.cache_read_input_tokens ?? 0;
+    cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+    estimatedCostUsd += cost;
+    const mu = ensureModel(model ?? "(unknown)");
+    mu.totalTokens += tokens;
+    mu.costUsd += cost;
+    mu.inputTokens += u.input_tokens ?? 0;
+    mu.outputTokens += u.output_tokens ?? 0;
+    mu.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+    mu.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+    const day = e.timestamp?.slice(0, 10);
+    if (day) ensureDay(day).totalTokens += tokens;
+    if (day) ensureDay(day).costUsd += cost;
+    return { tokens, cost };
+  };
   const isGenuineHumanTurn = (e) => !(e.origin?.kind && e.origin.kind !== "human") && e.promptSource !== "system" && e.isMeta !== true;
   let userMessages = 0;
+  const userTextsAfter = [];
+  entries.forEach((e, index) => {
+    if (e.type === "user" && e.message) userTextsAfter.push({ index, text: plainText(e.message.content) });
+  });
+  const replayedLater = (index, prompt) => userTextsAfter.some((u) => u.index > index && u.text.includes(prompt));
   let currentMode;
   const modeOrder = [];
   const noteMode = (m) => {
@@ -201,7 +302,23 @@ function parseTranscript(jsonl) {
     ensureModel(lastAssistant.model).activeMs += ms;
     if (lastAssistant.day) ensureDay(lastAssistant.day).activeMs += ms;
   };
-  for (const e of entries) {
+  const pushUserTurn = (e, text, toolCalls = []) => {
+    const day = e.timestamp?.slice(0, 10);
+    if (day) ensureDay(day).turns += 1;
+    if (isGenuineHumanTurn(e)) {
+      userMessages += 1;
+      if (day) ensureDay(day).userMessages += 1;
+    }
+    turns.push({
+      role: "user",
+      timestamp: e.timestamp,
+      text,
+      toolCalls,
+      isSidechain: e.isSidechain,
+      permissionMode: currentMode
+    });
+  };
+  for (const [index, e] of entries.entries()) {
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
     if (e.gitBranch && !gitBranch) gitBranch = e.gitBranch;
@@ -213,32 +330,50 @@ function parseTranscript(jsonl) {
     }
     if (e.type === "system") {
       if (e.subtype === "turn_duration" && typeof e.durationMs === "number") addActive(e.durationMs);
+      if (e.subtype === "compact_boundary") compactions++;
+      continue;
+    }
+    if (e.type === "cost-state") {
+      if (typeof e.totalCostUSD === "number") {
+        costRuns.set(e.startTime ?? 0, {
+          costUsd: e.totalCostUSD,
+          linesAdded: e.totalLinesAdded ?? 0,
+          linesRemoved: e.totalLinesRemoved ?? 0
+        });
+      }
+      continue;
+    }
+    if (e.type === "attachment") {
+      const a = e.attachment;
+      if (a?.type === "queued_command" && a.commandMode === "prompt" && a.origin?.kind === "human") {
+        const raw = plainText(a.prompt).trim();
+        const text2 = cleanUserText(raw);
+        if (text2 && !replayedLater(index, raw)) {
+          if (e.timestamp) timestamps.push(e.timestamp);
+          if (!firstUserPrompt && !SKILL_BODY_PREFIX.test(text2)) firstUserPrompt = text2;
+          pushUserTurn(e, text2);
+        }
+      }
       continue;
     }
     if (e.type !== "user" && e.type !== "assistant") continue;
     const msg = e.message;
     if (!msg) continue;
+    if (e.type === "user" && (e.isCompactSummary || e.isVisibleInTranscriptOnly)) continue;
+    const model = msg.model ?? e.model;
+    if (e.type === "assistant" && isSynthetic(e, model)) {
+      if (e.isApiErrorMessage) {
+        apiErrors++;
+        if (LIMIT_NOTICE.test(plainText(msg.content))) rateLimitHits++;
+      }
+      continue;
+    }
     if (e.type === "user" && e.permissionMode) noteMode(e.permissionMode);
     const blocks = asBlocks(msg.content);
-    const model = msg.model ?? e.model;
     if (model) models.add(model);
     if (e.timestamp) timestamps.push(e.timestamp);
     const day = e.timestamp?.slice(0, 10);
-    if (e.type === "assistant" && msg.usage) {
-      const u = msg.usage;
-      const turnTokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_read_input_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
-      const turnCost = costForUsage(model, u);
-      inputTokens += u.input_tokens ?? 0;
-      outputTokens += u.output_tokens ?? 0;
-      cacheReadTokens += u.cache_read_input_tokens ?? 0;
-      cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-      estimatedCostUsd += turnCost;
-      const mu = ensureModel(model ?? "(unknown)");
-      mu.totalTokens += turnTokens;
-      mu.costUsd += turnCost;
-      if (day) ensureDay(day).totalTokens += turnTokens;
-      if (day) ensureDay(day).costUsd += turnCost;
-    }
+    if (e.type === "assistant") addUsage(e, model);
     const textParts = [];
     const thinkingParts = [];
     const toolCalls = [];
@@ -249,26 +384,61 @@ function parseTranscript(jsonl) {
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
         const detail = toolDetail(b.name, b.input);
         if (b.name === "Skill" && detail) skills.add(detail);
-        if ((b.name === "Task" || b.name === "Agent") && detail) subagents.add(detail);
-        toolCalls.push({ name: b.name, detail, args: summarizeToolArgs(b.name, b.input) });
+        if ((b.name === "Task" || b.name === "Agent") && detail) {
+          subagents.add(detail);
+          if (b.id) agentTypeById.set(b.id, detail);
+        }
+        const tc = { name: b.name, detail, args: summarizeToolArgs(b.name, b.input) };
+        if (b.name === "AskUserQuestion") tc.questions = askedQuestions(b.input);
+        if (b.id) callsById.set(b.id, tc);
+        toolCalls.push(tc);
+      } else if (b.type === "tool_result" && b.tool_use_id && callsById.has(b.tool_use_id)) {
+        const tc = callsById.get(b.tool_use_id);
+        callsById.delete(b.tool_use_id);
+        if (tc.name === "AskUserQuestion") applyAnswers(tc, e.toolUseResult, b.is_error);
+        if (e.toolDenialKind) {
+          tc.denied = e.toolDenialKind;
+          toolDenials[e.toolDenialKind] = (toolDenials[e.toolDenialKind] ?? 0) + 1;
+        } else if (b.is_error) {
+          tc.error = true;
+          toolErrors[tc.name] = (toolErrors[tc.name] ?? 0) + 1;
+        }
       }
     }
     const rawText = textParts.join("\n\n").trim();
     const text = e.type === "user" ? cleanUserText(rawText) : rawText;
-    if (e.type === "user" && !firstUserPrompt && text && !SKILL_BODY_PREFIX.test(text)) {
-      firstUserPrompt = text;
+    if (e.type === "user") {
+      if (INTERRUPT.test(text)) {
+        interrupts++;
+        continue;
+      }
+      if (!firstUserPrompt && text && !SKILL_BODY_PREFIX.test(text)) firstUserPrompt = text;
+      if (!text && !toolCalls.length) continue;
+      pushUserTurn(e, text, toolCalls);
+      continue;
     }
+    const assistantModel = model ?? "(unknown)";
+    lastAssistant = { model: assistantModel, day };
     if (!text && !thinkingParts.length && !toolCalls.length) continue;
-    if (day) ensureDay(day).turns += 1;
-    if (e.type === "assistant") {
-      ensureModel(model ?? "(unknown)").turns += 1;
-      lastAssistant = { model: model ?? "(unknown)", day };
-    } else if (e.type === "user" && isGenuineHumanTurn(e)) {
-      userMessages += 1;
-      if (day) ensureDay(day).userMessages += 1;
+    const msgKey = msg.id ?? e.requestId;
+    const prior = msgKey ? turnByMessage.get(msgKey) : void 0;
+    if (prior) {
+      if (text) prior.text = prior.text ? `${prior.text}
+
+${text}` : text;
+      if (thinkingParts.length) {
+        const th = thinkingParts.join("\n\n");
+        prior.thinking = prior.thinking ? `${prior.thinking}
+
+${th}` : th;
+      }
+      prior.toolCalls.push(...toolCalls);
+      continue;
     }
-    turns.push({
-      role: e.type,
+    if (day) ensureDay(day).turns += 1;
+    ensureModel(assistantModel).turns += 1;
+    const turn = {
+      role: "assistant",
       timestamp: e.timestamp,
       model,
       text,
@@ -276,8 +446,31 @@ function parseTranscript(jsonl) {
       toolCalls,
       isSidechain: e.isSidechain,
       permissionMode: currentMode
-    });
+    };
+    if (msgKey) turnByMessage.set(msgKey, turn);
+    turns.push(turn);
   }
+  const subagentUsage = {};
+  for (const sub of opts.subagents ?? []) {
+    const type = sub.meta?.agentType ?? (sub.meta?.toolUseId ? agentTypeById.get(sub.meta.toolUseId) : void 0) ?? "unknown";
+    const su = subagentUsage[type] ??= { runs: 0, totalTokens: 0, costUsd: 0, toolCalls: 0 };
+    su.runs += 1;
+    for (const e of parseLines(sub.jsonl)) {
+      if (e.type !== "assistant" || !e.message) continue;
+      const model = e.message.model ?? e.model;
+      if (isSynthetic(e, model)) continue;
+      if (model) models.add(model);
+      const added = addUsage(e, model);
+      su.totalTokens += added.tokens;
+      su.costUsd += added.cost;
+      for (const b of asBlocks(e.message.content)) {
+        if (b.type !== "tool_use" || !b.name) continue;
+        toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        su.toolCalls += 1;
+      }
+    }
+  }
+  for (const su of Object.values(subagentUsage)) su.costUsd = Math.round(su.costUsd * 1e4) / 1e4;
   const activeMsMeasured = sawTurnDuration;
   if (!sawTurnDuration) {
     let prevTs;
@@ -298,6 +491,16 @@ function parseTranscript(jsonl) {
   const endedAt = timestamps[timestamps.length - 1];
   const durationMs = startedAt && endedAt ? new Date(endedAt).getTime() - new Date(startedAt).getTime() : void 0;
   const assistantTurns = turns.filter((t) => t.role === "assistant").length;
+  let reported;
+  if (costRuns.size) {
+    reported = { costUsd: 0, linesAdded: 0, linesRemoved: 0 };
+    for (const r of costRuns.values()) {
+      reported.costUsd += r.costUsd;
+      reported.linesAdded += r.linesAdded;
+      reported.linesRemoved += r.linesRemoved;
+    }
+    reported.costUsd = Math.round(reported.costUsd * 1e4) / 1e4;
+  }
   const stats = {
     turns: turns.length,
     userMessages,
@@ -318,7 +521,15 @@ function parseTranscript(jsonl) {
     usedAutoMode: modeOrder.includes("auto"),
     modelUsage,
     daily,
-    activeMsMeasured
+    activeMsMeasured,
+    toolErrors,
+    toolDenials,
+    subagentUsage,
+    interrupts,
+    compactions,
+    apiErrors,
+    rateLimitHits,
+    reported
   };
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;
   return {
@@ -335,13 +546,13 @@ function parseTranscript(jsonl) {
     parserVersion: PARSER_VERSION
   };
 }
-var PARSER_VERSION, ARG_CAP, ARG_FIELDS, NEVER, INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT, SKILL_BODY_PREFIX;
+var PARSER_VERSION, ARG_CAP, ARG_FIELDS, NEVER, INJECTED_TAG_NAME, INJECTED_BLOCK, INJECTED_TAG, CAVEAT, SKILL_BODY_PREFIX, INTERRUPT, LIMIT_NOTICE, isSynthetic;
 var init_parser = __esm({
   "../shared/src/parser.ts"() {
     "use strict";
     init_pricing();
     init_redact();
-    PARSER_VERSION = 4;
+    PARSER_VERSION = 7;
     ARG_CAP = 300;
     ARG_FIELDS = {
       Bash: ["command"],
@@ -369,6 +580,9 @@ var init_parser = __esm({
     INJECTED_TAG = new RegExp(`</?${INJECTED_TAG_NAME}\\b[^>]*>`, "g");
     CAVEAT = /Caveat:\s*The messages below were generated by the user while running local commands\.[\s\S]*?(?:\n\n|$)/g;
     SKILL_BODY_PREFIX = /^Base directory for this skill:\s*\S+/;
+    INTERRUPT = /^\[Request interrupted by user/;
+    LIMIT_NOTICE = /\b(session|weekly|usage) limit\b/i;
+    isSynthetic = (e, model) => model === "<synthetic>" || e.isApiErrorMessage === true;
   }
 });
 
@@ -393,33 +607,59 @@ function migrateBackfilled(parsed) {
   if (parsed.backfilledSessions) return Object.fromEntries(parsed.backfilledSessions.map((id) => [id, 0]));
   return {};
 }
-async function loadConfig() {
+async function readRaw() {
+  let raw;
   try {
-    const raw = await readFile(CONFIG_PATH, "utf8");
-    const parsed = JSON.parse(raw);
-    return {
-      name: parsed.name,
-      server: parsed.server ?? process.env.CLAUDELENS_SERVER,
-      token: parsed.token ?? process.env.CLAUDELENS_TOKEN,
-      ignoreProjects: parsed.ignoreProjects ?? [],
-      ignoreSessions: parsed.ignoreSessions ?? [],
-      paused: parsed.paused ?? false,
-      redact: parsed.redact ?? false,
-      backfilled: migrateBackfilled(parsed),
-      shareAccount: parsed.shareAccount
-    };
-  } catch {
-    return {
-      ...EMPTY,
-      server: process.env.CLAUDELENS_SERVER,
-      token: process.env.CLAUDELENS_TOKEN
-    };
+    raw = await readFile(CONFIG_PATH, "utf8");
+  } catch (err) {
+    if (err.code === "ENOENT") return {};
+    throw err;
   }
+  return JSON.parse(raw);
 }
-async function saveConfig(cfg) {
-  const tmp = `${CONFIG_PATH}.tmp`;
-  await writeFile(tmp, JSON.stringify(cfg, null, 2) + "\n", "utf8");
+function normalize(parsed) {
+  return {
+    name: parsed.name,
+    server: parsed.server,
+    token: parsed.token,
+    ignoreProjects: parsed.ignoreProjects ?? [],
+    ignoreSessions: parsed.ignoreSessions ?? [],
+    paused: parsed.paused ?? false,
+    redact: parsed.redact ?? true,
+    backfilled: migrateBackfilled(parsed),
+    backfilledMtime: parsed.backfilledMtime ?? {},
+    shareAccount: parsed.shareAccount
+  };
+}
+async function loadConfig() {
+  let cfg;
+  try {
+    cfg = normalize(await readRaw());
+  } catch {
+    cfg = { ...EMPTY, backfilled: {}, backfilledMtime: {} };
+  }
+  cfg.server ??= process.env.CLAUDELENS_SERVER;
+  cfg.token ??= process.env.CLAUDELENS_TOKEN;
+  return cfg;
+}
+async function updateConfig(mutate) {
+  const raw = await readRaw();
+  const cfg = normalize(raw);
+  mutate(cfg);
+  const { backfilledSessions: _legacy, ...rest } = raw;
+  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify({ ...rest, ...cfg }, null, 2) + "\n", "utf8");
   await rename(tmp, CONFIG_PATH);
+  return cfg;
+}
+async function recordSynced(done) {
+  if (!Object.keys(done).length) return;
+  await updateConfig((cfg) => {
+    for (const [id, { version, mtime }] of Object.entries(done)) {
+      cfg.backfilled[id] = Math.max(cfg.backfilled[id] ?? 0, version);
+      if (mtime !== void 0) cfg.backfilledMtime[id] = Math.max(cfg.backfilledMtime[id] ?? 0, mtime);
+    }
+  });
 }
 function isConnected(cfg) {
   return Boolean(cfg.server);
@@ -502,8 +742,9 @@ var init_config = __esm({
       ignoreProjects: [],
       ignoreSessions: [],
       paused: false,
-      redact: false,
-      backfilled: {}
+      redact: true,
+      backfilled: {},
+      backfilledMtime: {}
     };
   }
 });
@@ -542,77 +783,172 @@ var init_account = __esm({
   }
 });
 
-// src/sync.ts
-var sync_exports = {};
-__export(sync_exports, {
-  runSync: () => runSync
-});
-import { readFile as readFile3 } from "node:fs/promises";
-async function readStdin() {
-  const chunks = [];
-  for await (const chunk of process.stdin) chunks.push(chunk);
-  return Buffer.concat(chunks).toString("utf8");
-}
-async function readSettledSession(path) {
-  let session = parseTranscript(await readFile3(path, "utf8"));
-  for (let i = 0; i < 10; i++) {
-    const last = session.turns[session.turns.length - 1];
-    if (last && last.role === "assistant") break;
-    await sleep(250);
-    session = parseTranscript(await readFile3(path, "utf8"));
-  }
-  return session;
-}
-async function runSync() {
-  const cfg = await loadConfig();
-  const raw = await readStdin();
-  let hook = {};
+// src/upload.ts
+import { readdir, readFile as readFile3 } from "node:fs/promises";
+import { join as join3 } from "node:path";
+async function readSubagents(transcriptPath) {
+  const dir = join3(transcriptPath.replace(/\.jsonl$/, ""), "subagents");
+  let names;
   try {
-    hook = JSON.parse(raw);
+    names = (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
   } catch {
-    return;
+    return [];
   }
-  const { transcript_path, cwd, session_id } = hook;
-  if (!transcript_path || !cwd) return;
-  if (!await shouldSync(cwd, session_id, cfg)) return;
-  const session = await readSettledSession(transcript_path);
-  if (!session.sessionId || session.stats.turns < 1) return;
-  if (cfg.ignoreSessions.includes(session.sessionId)) return;
+  const out = [];
+  for (const f of names) {
+    try {
+      const jsonl = await readFile3(join3(dir, f), "utf8");
+      let meta;
+      try {
+        meta = JSON.parse(await readFile3(join3(dir, f.replace(/\.jsonl$/, ".meta.json")), "utf8"));
+      } catch {
+      }
+      out.push({ meta, jsonl });
+    } catch {
+    }
+  }
+  return out;
+}
+async function parseSessionFile(path) {
+  const [jsonl, subagents] = await Promise.all([readFile3(path, "utf8"), readSubagents(path)]);
+  return parseTranscript(jsonl, { subagents });
+}
+async function uploadSession(session, cfg, author, account) {
   if (cfg.redact) {
     session.turns = redactDeep(session.turns).value;
+    session.title = redactDeep(session.title).value;
     if (session.stats.firstUserPrompt) {
       session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
     }
   }
-  const account = cfg.shareAccount === false ? void 0 : await readAccount();
-  const payload = { session, author: resolveName(cfg, account), account };
+  const payload = { session, author, account };
   const res = await fetch(`${cfg.server}/api/sessions`, {
     method: "POST",
     headers: {
       "content-type": "application/json",
       ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
     },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS)
   });
-  if (!res.ok) return;
+  if (!res.ok) throw new Error(`server responded ${res.status}`);
   const body = await res.json().catch(() => void 0);
-  if (body?.ignored && body.untrack) {
-    if (body.untrack.sessionId && !cfg.ignoreSessions.includes(body.untrack.sessionId)) {
-      cfg.ignoreSessions.push(body.untrack.sessionId);
-      await saveConfig(cfg);
-    } else if (body.untrack.cwd && !cfg.ignoreProjects.includes(body.untrack.cwd)) {
-      cfg.ignoreProjects.push(body.untrack.cwd);
-      await saveConfig(cfg);
+  if (body?.ignored) {
+    const { sessionId, cwd } = body.untrack ?? {};
+    if (sessionId || cwd) {
+      await updateConfig((c) => {
+        if (sessionId && !c.ignoreSessions.includes(sessionId)) c.ignoreSessions.push(sessionId);
+        else if (cwd && !c.ignoreProjects.includes(cwd)) c.ignoreProjects.push(cwd);
+      });
     }
+    return false;
+  }
+  return true;
+}
+var UPLOAD_TIMEOUT_MS;
+var init_upload = __esm({
+  "src/upload.ts"() {
+    "use strict";
+    init_src();
+    init_config();
+    UPLOAD_TIMEOUT_MS = 15e3;
+  }
+});
+
+// src/sync.ts
+var sync_exports = {};
+__export(sync_exports, {
+  isDetached: () => isDetached,
+  runSync: () => runSync,
+  spawnDetached: () => spawnDetached
+});
+import { spawn } from "node:child_process";
+import { readFile as readFile4, stat } from "node:fs/promises";
+async function readStdin() {
+  const chunks = [];
+  for await (const chunk of process.stdin) chunks.push(chunk);
+  return Buffer.concat(chunks).toString("utf8");
+}
+function spawnDetached(op2, env = {}) {
+  try {
+    const child = spawn(process.execPath, [process.argv[1], op2, "--detached"], {
+      detached: true,
+      stdio: "ignore",
+      env: { ...process.env, ...env }
+    });
+    child.on("error", () => {
+    });
+    child.unref();
+    return true;
+  } catch {
+    return false;
   }
 }
-var sleep;
+function lastEntry(raw) {
+  const end = raw.trimEnd();
+  try {
+    return JSON.parse(end.slice(end.lastIndexOf("\n") + 1));
+  } catch {
+    return void 0;
+  }
+}
+async function readSettledSession(path, inline) {
+  const subagents = await readSubagents(path);
+  let mtime = (await stat(path)).mtimeMs;
+  let raw = await readFile4(path, "utf8");
+  for (let i = 0; i < (inline ? 4 : 20); i++) {
+    const tail = lastEntry(raw);
+    if (tail?.type === "system" && (tail.subtype === "stop_hook_summary" || tail.subtype === "turn_duration")) break;
+    if (inline && tail?.type === "assistant") break;
+    await sleep(250);
+    mtime = (await stat(path)).mtimeMs;
+    raw = await readFile4(path, "utf8");
+  }
+  return { session: parseTranscript(raw, { subagents }), mtime };
+}
+async function runSync() {
+  let hook = {};
+  try {
+    hook = JSON.parse(isDetached() ? process.env[PAYLOAD_ENV] ?? "" : await readStdin());
+  } catch {
+    return;
+  }
+  const { transcript_path, cwd, session_id } = hook;
+  if (!transcript_path || !cwd) return;
+  if (!isDetached()) {
+    const cfg = await loadConfig();
+    if (!isConnected(cfg) || cfg.paused || envOptedOut()) return;
+    if (spawnDetached("sync", { [PAYLOAD_ENV]: JSON.stringify({ transcript_path, cwd, session_id }) })) return;
+  }
+  await syncNow(transcript_path, cwd, session_id, !isDetached());
+}
+async function syncNow(transcriptPath, cwd, sessionId, inline) {
+  const cfg = await loadConfig();
+  if (!await shouldSync(cwd, sessionId, cfg)) return;
+  const { session, mtime } = await readSettledSession(transcriptPath, inline);
+  if (!session.sessionId || session.stats.turns < 1) return;
+  if (cfg.ignoreSessions.includes(session.sessionId)) return;
+  const id = session.sessionId;
+  if (cfg.backfilled[id] === void 0) {
+    await updateConfig((c) => {
+      c.backfilled[id] ??= 0;
+    });
+  }
+  const account = cfg.shareAccount === false ? void 0 : await readAccount();
+  if (await uploadSession(session, cfg, resolveName(cfg, account), account)) {
+    await recordSynced({ [id]: { version: PARSER_VERSION, mtime } });
+  }
+}
+var PAYLOAD_ENV, isDetached, sleep;
 var init_sync = __esm({
   "src/sync.ts"() {
     "use strict";
     init_src();
     init_config();
     init_account();
+    init_upload();
+    PAYLOAD_ENV = "CLAUDELENS_HOOK_PAYLOAD";
+    isDetached = () => process.argv.includes("--detached");
     sleep = (ms) => new Promise((r) => setTimeout(r, ms));
   }
 });
@@ -622,16 +958,18 @@ var history_exports = {};
 __export(history_exports, {
   backfillDirs: () => backfillDirs,
   backfillProject: () => backfillProject,
+  catchUp: () => catchUp,
   listProjects: () => listProjects,
+  runCatchUp: () => runCatchUp,
   runListProjects: () => runListProjects,
   runSyncHistory: () => runSyncHistory
 });
-import { readdir, readFile as readFile4, stat } from "node:fs/promises";
+import { readdir as readdir2, readFile as readFile5, stat as stat2 } from "node:fs/promises";
 import { homedir as homedir3 } from "node:os";
-import { join as join3, resolve as resolve2 } from "node:path";
+import { basename as basename2, join as join4, resolve as resolve2 } from "node:path";
 async function jsonlFiles(dir) {
   try {
-    return (await readdir(dir)).filter((f) => f.endsWith(".jsonl"));
+    return (await readdir2(dir)).filter((f) => f.endsWith(".jsonl"));
   } catch {
     return [];
   }
@@ -639,7 +977,7 @@ async function jsonlFiles(dir) {
 async function peek(path) {
   let raw;
   try {
-    raw = await readFile4(path, "utf8");
+    raw = await readFile5(path, "utf8");
   } catch {
     return {};
   }
@@ -663,21 +1001,21 @@ async function listProjects() {
   const cfg = await loadConfig();
   let dirNames;
   try {
-    dirNames = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+    dirNames = (await readdir2(PROJECTS_DIR, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
   } catch {
     return [];
   }
   const entries = [];
   for (const dir of dirNames) {
-    const full = join3(PROJECTS_DIR, dir);
+    const full = join4(PROJECTS_DIR, dir);
     const files = await jsonlFiles(full);
     if (!files.length) continue;
     let cwd;
     let synced = 0;
     let lastMtime = 0;
     for (const f of files) {
-      const path = join3(full, f);
-      const [{ cwd: fileCwd, sessionId }, st] = await Promise.all([peek(path), stat(path)]);
+      const path = join4(full, f);
+      const [{ cwd: fileCwd, sessionId }, st] = await Promise.all([peek(path), stat2(path)]);
       cwd ??= fileCwd;
       const version = sessionId ? cfg.backfilled[sessionId] : void 0;
       if (version !== void 0 && version >= PARSER_VERSION) synced++;
@@ -726,13 +1064,18 @@ async function findProjectDir(cwd) {
   const entries = await listProjects();
   return entries.find((e) => e.cwd && resolve2(e.cwd) === target)?.dir;
 }
-async function backfillOne(path, cfg, author, account, force, result) {
+function isCurrent(cfg, sessionId, mtime) {
+  const version = cfg.backfilled[sessionId];
+  const syncedMtime = cfg.backfilledMtime[sessionId];
+  return version !== void 0 && version >= PARSER_VERSION && (syncedMtime === void 0 || mtime <= syncedMtime);
+}
+async function backfillOne(path, cfg, author, account, force, result, done) {
   try {
-    const session = parseTranscript(await readFile4(path, "utf8"));
+    const { mtimeMs } = await stat2(path);
+    const session = await parseSessionFile(path);
     if (!session.sessionId || session.sessionId === "unknown" || session.stats.turns < 1) return;
     const priorVersion = cfg.backfilled[session.sessionId];
-    const alreadyCurrent = priorVersion !== void 0 && priorVersion >= PARSER_VERSION;
-    if (!force && alreadyCurrent) {
+    if (!force && isCurrent(cfg, session.sessionId, mtimeMs)) {
       result.skipped++;
       return;
     }
@@ -740,51 +1083,80 @@ async function backfillOne(path, cfg, author, account, force, result) {
       result.skipped++;
       return;
     }
-    if (cfg.redact) {
-      session.turns = redactDeep(session.turns).value;
-      if (session.stats.firstUserPrompt) {
-        session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
-      }
+    if (!await uploadSession(session, cfg, author, account)) {
+      result.skipped++;
+      return;
     }
-    const payload = { session, author, account };
-    const res = await fetch(`${cfg.server}/api/sessions`, {
-      method: "POST",
-      headers: {
-        "content-type": "application/json",
-        ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
-      },
-      body: JSON.stringify(payload)
-    });
-    if (!res.ok) throw new Error(`server responded ${res.status}`);
     if (priorVersion !== void 0 && priorVersion < PARSER_VERSION) result.upgraded++;
-    cfg.backfilled[session.sessionId] = PARSER_VERSION;
+    done[session.sessionId] = { version: PARSER_VERSION, mtime: mtimeMs };
     result.synced++;
   } catch (err) {
     result.failed++;
     if (process.env.CLAUDELENS_DEBUG) console.error(`[claudelens sync-history] ${path}:`, err);
   }
 }
-async function backfillDirs(dirs, opts = {}) {
-  const result = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
-  const cfg = await loadConfig();
-  if (!isConnected(cfg)) return result;
+async function uploadFiles(files, cfg, opts, result) {
   const account = cfg.shareAccount === false ? void 0 : await readAccount();
   const author = resolveName(cfg, account);
   const concurrency = Math.max(1, opts.concurrency ?? 3);
+  const done = {};
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result, done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
+  await recordSynced(done);
+}
+async function backfillDirs(dirs, opts = {}) {
+  const result = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
   for (const dir of dirs) {
-    const full = join3(PROJECTS_DIR, dir);
-    const files = (await jsonlFiles(full)).map((f) => join3(full, f));
+    const cfg = await loadConfig();
+    if (!isConnected(cfg) || cfg.paused) break;
+    const full = join4(PROJECTS_DIR, dir);
+    const files = (await jsonlFiles(full)).map((f) => join4(full, f));
     result.scanned += files.length;
-    let next = 0;
-    const worker = async () => {
-      while (next < files.length) {
-        await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
-    await saveConfig(cfg);
+    await uploadFiles(files, cfg, opts, result);
   }
   return result;
+}
+async function catchUp() {
+  const result = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
+  const cfg = await loadConfig();
+  if (!isConnected(cfg) || cfg.paused || envOptedOut()) return result;
+  let dirNames;
+  try {
+    dirNames = (await readdir2(PROJECTS_DIR, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return result;
+  }
+  const stale = [];
+  for (const dir of dirNames) {
+    for (const f of await jsonlFiles(join4(PROJECTS_DIR, dir))) {
+      const id = basename2(f, ".jsonl");
+      if (cfg.backfilled[id] === void 0 || cfg.ignoreSessions.includes(id)) continue;
+      const path = join4(PROJECTS_DIR, dir, f);
+      try {
+        const { mtimeMs } = await stat2(path);
+        if (!isCurrent(cfg, id, mtimeMs)) stale.push({ path, mtime: mtimeMs });
+      } catch {
+      }
+    }
+  }
+  stale.sort((a, b) => b.mtime - a.mtime);
+  const batch = stale.slice(0, CATCHUP_CAP).map((s) => s.path);
+  result.scanned = batch.length;
+  if (batch.length) await uploadFiles(batch, cfg, {}, result);
+  return result;
+}
+async function runCatchUp() {
+  if (!isDetached()) {
+    const cfg = await loadConfig();
+    if (!isConnected(cfg) || cfg.paused || envOptedOut()) return;
+    if (spawnDetached("catchup")) return;
+  }
+  await catchUp();
 }
 async function backfillProject(cwd, opts = {}) {
   const dir = await findProjectDir(cwd);
@@ -809,14 +1181,17 @@ async function runSyncHistory() {
     `\u2714 Synced ${synced} session(s) (${upgraded} upgraded). Skipped ${skipped} (already synced or excluded). Failed ${failed}.`
   );
 }
-var PROJECTS_DIR;
+var PROJECTS_DIR, CATCHUP_CAP;
 var init_history = __esm({
   "src/history.ts"() {
     "use strict";
     init_src();
     init_config();
     init_account();
-    PROJECTS_DIR = join3(homedir3(), ".claude", "projects");
+    init_upload();
+    init_sync();
+    PROJECTS_DIR = join4(homedir3(), ".claude", "projects");
+    CATCHUP_CAP = 25;
   }
 });
 
@@ -848,14 +1223,13 @@ async function runConnect() {
     console.error("Usage: connect <server-url> <token> <your display name>");
     process.exit(1);
   }
-  const cfg = await loadConfig();
-  cfg.server = args.server.replace(/\/+$/, "");
-  if (args.token) cfg.token = args.token;
-  if (args.name) cfg.name = args.name;
-  if (args.session && !cfg.ignoreSessions.includes(args.session)) {
-    cfg.ignoreSessions.push(args.session);
-  }
-  await saveConfig(cfg);
+  const server = args.server.replace(/\/+$/, "");
+  const cfg = await updateConfig((c) => {
+    c.server = server;
+    if (args.token) c.token = args.token;
+    if (args.name) c.name = args.name;
+    if (args.session && !c.ignoreSessions.includes(args.session)) c.ignoreSessions.push(args.session);
+  });
   const account = cfg.shareAccount === false ? void 0 : await readAccount();
   console.log(`\u2714 Connected to ${cfg.server} as "${resolveName(cfg, account)}".`);
   console.log("Tracking is now on for every project. This session is excluded so the token is never uploaded.");
@@ -891,9 +1265,9 @@ __export(optout_exports, {
   runUntrackProject: () => runUntrackProject,
   runUntrackSession: () => runUntrackSession
 });
-import { readdir as readdir2, readFile as readFile5, writeFile as writeFile2, unlink, stat as stat2 } from "node:fs/promises";
+import { readdir as readdir3, readFile as readFile6, writeFile as writeFile2, unlink, stat as stat3 } from "node:fs/promises";
 import { homedir as homedir4 } from "node:os";
-import { join as join4, resolve as resolve4 } from "node:path";
+import { join as join5, resolve as resolve4 } from "node:path";
 function argFlag(name) {
   return process.argv.slice(3).includes(name);
 }
@@ -909,23 +1283,23 @@ async function resolveSessionId(explicit, cwd) {
   if (clean && !clean.includes("$") && !clean.includes("{")) return clean;
   let dirs;
   try {
-    dirs = await readdir2(PROJECTS_DIR2);
+    dirs = await readdir3(PROJECTS_DIR2);
   } catch {
     return void 0;
   }
   let best;
   for (const d of dirs) {
-    const full = join4(PROJECTS_DIR2, d);
+    const full = join5(PROJECTS_DIR2, d);
     let files;
     try {
-      files = (await readdir2(full)).filter((f) => f.endsWith(".jsonl"));
+      files = (await readdir3(full)).filter((f) => f.endsWith(".jsonl"));
     } catch {
       continue;
     }
     for (const f of files) {
-      const path = join4(full, f);
+      const path = join5(full, f);
       try {
-        const raw = await readFile5(path, "utf8");
+        const raw = await readFile6(path, "utf8");
         let sid;
         let matches = false;
         let scanned = 0;
@@ -939,7 +1313,7 @@ async function resolveSessionId(explicit, cwd) {
           }
         }
         if (matches && sid) {
-          const { mtimeMs } = await stat2(path);
+          const { mtimeMs } = await stat3(path);
           if (!best || mtimeMs > best.mtime) best = { id: sid, mtime: mtimeMs };
         }
       } catch {
@@ -956,17 +1330,18 @@ async function runUntrackSession() {
     return;
   }
   if (!cfg.ignoreSessions.includes(id)) {
-    cfg.ignoreSessions.push(id);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      if (!c.ignoreSessions.includes(id)) c.ignoreSessions.push(id);
+    });
   }
   console.log(`\u2714 This session (${id.slice(0, 8)}) will not be tracked. Nothing from it is sent to the dashboard.`);
 }
 async function runTrackSession() {
-  const cfg = await loadConfig();
   const id = await resolveSessionId(positional(), process.cwd());
   if (id) {
-    cfg.ignoreSessions = cfg.ignoreSessions.filter((s) => s !== id);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      c.ignoreSessions = c.ignoreSessions.filter((s) => s !== id);
+    });
   }
   console.log("\u2714 This session is tracked again (syncs from the next turn).");
 }
@@ -975,12 +1350,13 @@ async function runUntrackProject() {
   const dir = positionalDir();
   const team = argFlag("--team") || argFlag("--shared");
   if (!isExcludedLocally(dir, cfg)) {
-    cfg.ignoreProjects.push(dir);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      if (!isExcludedLocally(dir, c)) c.ignoreProjects.push(dir);
+    });
   }
   if (team) {
     await writeFile2(
-      join4(dir, REPO_MARKER),
+      join5(dir, REPO_MARKER),
       "# ClaudeLens: this repo is never tracked, for anyone. Commit this file.\nignore: true\n",
       "utf8"
     );
@@ -990,14 +1366,14 @@ async function runUntrackProject() {
   }
 }
 async function runTrackProject() {
-  const cfg = await loadConfig();
   const dir = positionalDir();
   const team = argFlag("--team") || argFlag("--shared");
-  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve4(p) !== dir);
-  await saveConfig(cfg);
+  await updateConfig((c) => {
+    c.ignoreProjects = c.ignoreProjects.filter((p) => resolve4(p) !== dir);
+  });
   if (team) {
     try {
-      await unlink(join4(dir, REPO_MARKER));
+      await unlink(join5(dir, REPO_MARKER));
     } catch {
     }
   }
@@ -1007,9 +1383,9 @@ async function runTrackProject() {
   );
 }
 async function setPaused(paused) {
-  const cfg = await loadConfig();
-  cfg.paused = paused;
-  await saveConfig(cfg);
+  await updateConfig((c) => {
+    c.paused = paused;
+  });
   console.log(
     paused ? "\u23F8  Paused \u2014 nothing syncs on this machine until /claudelens:resume." : "\u25B6  Resumed \u2014 tracked projects sync again from the next turn."
   );
@@ -1020,7 +1396,7 @@ var init_optout = __esm({
     "use strict";
     init_config();
     init_history();
-    PROJECTS_DIR2 = join4(homedir4(), ".claude", "projects");
+    PROJECTS_DIR2 = join5(homedir4(), ".claude", "projects");
     pretty = (d) => d.replace(homedir4(), "~");
     runPause = () => setPaused(true);
     runResume = () => setPaused(false);
@@ -1091,11 +1467,11 @@ var update_exports = {};
 __export(update_exports, {
   runUpdate: () => runUpdate
 });
-import { readFile as readFile6, cp } from "node:fs/promises";
+import { readFile as readFile7, cp } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { homedir as homedir6 } from "node:os";
-import { join as join5, resolve as resolve6 } from "node:path";
+import { join as join6, resolve as resolve6 } from "node:path";
 function git(args, cwd) {
   return spawnSync("git", args, { cwd, stdio: "inherit" }).status === 0;
 }
@@ -1108,16 +1484,16 @@ function runningRoot() {
 }
 async function findMarketplace() {
   try {
-    const raw = await readFile6(join5(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
+    const raw = await readFile7(join6(PLUGINS_DIR, "known_marketplaces.json"), "utf8");
     const reg = JSON.parse(raw);
     for (const entry of Object.values(reg)) {
       const loc = entry.installLocation;
-      if (loc && existsSync(join5(loc, ".git")) && existsSync(join5(loc, "plugin", MARKER))) return loc;
+      if (loc && existsSync(join6(loc, ".git")) && existsSync(join6(loc, "plugin", MARKER))) return loc;
     }
   } catch {
   }
-  const guess = join5(PLUGINS_DIR, "marketplaces", "claudelens");
-  if (existsSync(join5(guess, ".git")) && existsSync(join5(guess, "plugin", MARKER))) return guess;
+  const guess = join6(PLUGINS_DIR, "marketplaces", "claudelens");
+  if (existsSync(join6(guess, ".git")) && existsSync(join6(guess, "plugin", MARKER))) return guess;
   return void 0;
 }
 async function runUpdate() {
@@ -1132,7 +1508,7 @@ async function runUpdate() {
     console.log("git pull failed \u2014 resolve it in that checkout, then retry.");
     return;
   }
-  const src = join5(mp, "plugin");
+  const src = join6(mp, "plugin");
   const root = runningRoot();
   if (!root || !existsSync(root)) {
     console.log("\u2714 Latest fetched. Activate it with  /plugin  \u2192  update  (or restart Claude Code).");
@@ -1143,8 +1519,8 @@ async function runUpdate() {
     return;
   }
   for (const part of ["dist", "skills", "hooks", ".claude-plugin"]) {
-    const from = join5(src, part);
-    if (existsSync(from)) await cp(from, join5(root, part), { recursive: true, force: true });
+    const from = join6(src, part);
+    if (existsSync(from)) await cp(from, join6(root, part), { recursive: true, force: true });
   }
   console.log("\u2714 Updated \u2014 new code runs from the next turn.");
   console.log("(If an update adds/removes slash commands, run /plugin \u2192 update too so the menu refreshes.)");
@@ -1153,8 +1529,8 @@ var PLUGINS_DIR, MARKER;
 var init_update = __esm({
   "src/update.ts"() {
     "use strict";
-    PLUGINS_DIR = join5(homedir6(), ".claude", "plugins");
-    MARKER = join5("dist", "claudelens.mjs");
+    PLUGINS_DIR = join6(homedir6(), ".claude", "plugins");
+    MARKER = join6("dist", "claudelens.mjs");
   }
 });
 
@@ -1164,6 +1540,8 @@ async function main() {
   switch (op) {
     case "sync":
       return (await Promise.resolve().then(() => (init_sync(), sync_exports))).runSync();
+    case "catchup":
+      return (await Promise.resolve().then(() => (init_history(), history_exports))).runCatchUp();
     case "connect":
       return (await Promise.resolve().then(() => (init_connect(), connect_exports))).runConnect();
     case "untrack-session":
@@ -1195,7 +1573,7 @@ Unknown op: ${op ?? "(none)"}`
   }
 }
 main().catch((err) => {
-  if (op === "sync") {
+  if (op === "sync" || op === "catchup") {
     if (process.env.CLAUDELENS_DEBUG) console.error("[claudelens sync]", err);
     return;
   }

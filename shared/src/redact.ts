@@ -1,6 +1,8 @@
 // Best-effort secret redaction applied before a session leaves a developer's
-// machine. This is a safety net, not a guarantee — the CLI always shows a
-// preview and requires explicit confirmation before upload.
+// machine. This is a safety net, not a guarantee: sync is automatic (Stop hook),
+// with no preview or confirmation step. The CLI redacts turns, title and
+// firstUserPrompt when cfg.redact is on (the default); ToolCall.args is always
+// redacted by the parser; the server re-redacts on ingest as a backstop.
 
 interface Rule {
   name: string;
@@ -34,6 +36,10 @@ export function redactText(input: string): RedactionResult {
   const hits: Record<string, number> = {};
   for (const rule of RULES) {
     text = text.replace(rule.re, (...args: unknown[]) => {
+      const match = args[0] as string;
+      // Already-redacted values (`KEY=«REDACTED»`, `user:«REDACTED»@`) still fit the assignment
+      // and conn-uri shapes; leave them alone so redaction is idempotent and hit counts are real.
+      if (match.includes('«REDACTED»')) return match;
       hits[rule.name] = (hits[rule.name] ?? 0) + 1;
       if (rule.name === 'assignment') {
         const [, key, sep] = args as [string, string, string];

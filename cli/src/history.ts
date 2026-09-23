@@ -7,15 +7,27 @@
 //   `backfillProject` — upload ONE project by cwd, reused by connect (current
 //                        project only) and track-project (re-enabling backs up
 //                        its history automatically).
-// All three reuse the exact same parse + upsert path as the live Stop-hook
-// sync, so a backfilled session is indistinguishable from a live one.
+//   `catchup`         — SessionStart hook: re-upload (≤25) already-ledgered
+//                        sessions that a parser bump or an unsynced tail left stale.
+// All of them reuse the exact same parse + upsert path as the live Stop-hook
+// sync (upload.ts), so a backfilled session is indistinguishable from a live one.
 import { readdir, readFile, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
-import { join, resolve } from 'node:path';
-import { parseTranscript, redactDeep, PARSER_VERSION } from '@claudelens/shared';
-import type { AccountIdentity, IngestPayload } from '@claudelens/shared';
-import { type ClaudeLensConfig, loadConfig, saveConfig, shouldSync, resolveName, isConnected } from './config.js';
+import { basename, join, resolve } from 'node:path';
+import { PARSER_VERSION } from '@claudelens/shared';
+import type { AccountIdentity } from '@claudelens/shared';
+import {
+  type ClaudeLensConfig,
+  loadConfig,
+  shouldSync,
+  resolveName,
+  isConnected,
+  recordSynced,
+  envOptedOut,
+} from './config.js';
 import { readAccount } from './account.js';
+import { parseSessionFile, uploadSession } from './upload.js';
+import { isDetached, spawnDetached } from './sync.js';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
 
@@ -152,6 +164,16 @@ async function findProjectDir(cwd: string): Promise<string | undefined> {
   return entries.find((e) => e.cwd && resolve(e.cwd) === target)?.dir;
 }
 
+/** Session id -> ledger update, flushed to the config with a merge (never a whole-config save). */
+type Done = Record<string, { version: number; mtime: number }>;
+
+/** True when the ledger says this file was uploaded by the current parser and hasn't grown since. */
+function isCurrent(cfg: ClaudeLensConfig, sessionId: string, mtime: number): boolean {
+  const version = cfg.backfilled[sessionId];
+  const syncedMtime = cfg.backfilledMtime[sessionId];
+  return version !== undefined && version >= PARSER_VERSION && (syncedMtime === undefined || mtime <= syncedMtime);
+}
+
 async function backfillOne(
   path: string,
   cfg: ClaudeLensConfig,
@@ -159,14 +181,15 @@ async function backfillOne(
   account: AccountIdentity | undefined,
   force: boolean,
   result: BackfillResult,
+  done: Done,
 ): Promise<void> {
   try {
-    const session = parseTranscript(await readFile(path, 'utf8'));
+    const { mtimeMs } = await stat(path);
+    const session = await parseSessionFile(path);
     if (!session.sessionId || session.sessionId === 'unknown' || session.stats.turns < 1) return;
 
     const priorVersion = cfg.backfilled[session.sessionId];
-    const alreadyCurrent = priorVersion !== undefined && priorVersion >= PARSER_VERSION;
-    if (!force && alreadyCurrent) {
+    if (!force && isCurrent(cfg, session.sessionId, mtimeMs)) {
       result.skipped++;
       return;
     }
@@ -175,26 +198,13 @@ async function backfillOne(
       return;
     }
 
-    if (cfg.redact) {
-      session.turns = redactDeep(session.turns).value;
-      if (session.stats.firstUserPrompt) {
-        session.stats.firstUserPrompt = redactDeep(session.stats.firstUserPrompt).value;
-      }
+    if (!(await uploadSession(session, cfg, author, account))) {
+      result.skipped++; // tombstoned server-side; now in the local opt-out lists
+      return;
     }
 
-    const payload: IngestPayload = { session, author, account };
-    const res = await fetch(`${cfg.server}/api/sessions`, {
-      method: 'POST',
-      headers: {
-        'content-type': 'application/json',
-        ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
-      },
-      body: JSON.stringify(payload),
-    });
-    if (!res.ok) throw new Error(`server responded ${res.status}`);
-
     if (priorVersion !== undefined && priorVersion < PARSER_VERSION) result.upgraded++;
-    cfg.backfilled[session.sessionId] = PARSER_VERSION;
+    done[session.sessionId] = { version: PARSER_VERSION, mtime: mtimeMs };
     result.synced++;
   } catch (err) {
     result.failed++;
@@ -202,32 +212,94 @@ async function backfillOne(
   }
 }
 
+/** Upload `files` with bounded concurrency, then merge their ledger entries into the config. */
+async function uploadFiles(
+  files: string[],
+  cfg: ClaudeLensConfig,
+  opts: { force?: boolean; concurrency?: number },
+  result: BackfillResult,
+): Promise<void> {
+  const account = cfg.shareAccount === false ? undefined : await readAccount();
+  const author = resolveName(cfg, account);
+  const concurrency = Math.max(1, opts.concurrency ?? 3);
+  const done: Done = {};
+  let next = 0;
+  const worker = async () => {
+    while (next < files.length) {
+      await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result, done);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
+  await recordSynced(done);
+}
+
 /** Upload every session under the given `~/.claude/projects` dir names. Bounded
  *  concurrency so hundreds of sessions don't upload one at a time. */
 export async function backfillDirs(dirs: string[], opts: { force?: boolean; concurrency?: number } = {}): Promise<BackfillResult> {
   const result: BackfillResult = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
-  const cfg = await loadConfig();
-  if (!isConnected(cfg)) return result;
-
-  const account = cfg.shareAccount === false ? undefined : await readAccount();
-  const author = resolveName(cfg, account);
-  const concurrency = Math.max(1, opts.concurrency ?? 3);
 
   for (const dir of dirs) {
+    // Reloaded per project: a pause/untrack made while a long backfill runs takes effect at the
+    // next project, and the ledger merge (recordSynced) never overwrites it.
+    const cfg = await loadConfig();
+    if (!isConnected(cfg) || cfg.paused) break;
     const full = join(PROJECTS_DIR, dir);
     const files = (await jsonlFiles(full)).map((f) => join(full, f));
     result.scanned += files.length;
-
-    let next = 0;
-    const worker = async () => {
-      while (next < files.length) {
-        await backfillOne(files[next++], cfg, author, account, opts.force ?? false, result);
-      }
-    };
-    await Promise.all(Array.from({ length: Math.min(concurrency, files.length) }, worker));
-    await saveConfig(cfg); // persist progress per project so an interruption doesn't re-upload everything
+    await uploadFiles(files, cfg, opts, result); // persists progress per project
   }
   return result;
+}
+
+const CATCHUP_CAP = 25;
+
+/**
+ * SessionStart catch-up. Re-uploads sessions the ledger already knows (so it never uploads history
+ * the user didn't opt into) that are stale: uploaded by an older PARSER_VERSION, attempted but never
+ * landed (version 0 — offline), or whose file grew after the last upload (lines written after the
+ * final Stop hook, e.g. its turn_duration / cost-state). Newest first, capped per run; the rest
+ * follow on later session starts. Same shouldSync gate + tombstone handling as backfill.
+ */
+export async function catchUp(): Promise<BackfillResult> {
+  const result: BackfillResult = { scanned: 0, synced: 0, skipped: 0, failed: 0, upgraded: 0 };
+  const cfg = await loadConfig();
+  if (!isConnected(cfg) || cfg.paused || envOptedOut()) return result;
+
+  let dirNames: string[];
+  try {
+    dirNames = (await readdir(PROJECTS_DIR, { withFileTypes: true })).filter((e) => e.isDirectory()).map((e) => e.name);
+  } catch {
+    return result;
+  }
+  const stale: { path: string; mtime: number }[] = [];
+  for (const dir of dirNames) {
+    for (const f of await jsonlFiles(join(PROJECTS_DIR, dir))) {
+      const id = basename(f, '.jsonl'); // Claude Code names the file after the session id
+      if (cfg.backfilled[id] === undefined || cfg.ignoreSessions.includes(id)) continue;
+      const path = join(PROJECTS_DIR, dir, f);
+      try {
+        const { mtimeMs } = await stat(path);
+        if (!isCurrent(cfg, id, mtimeMs)) stale.push({ path, mtime: mtimeMs });
+      } catch {
+        /* vanished between readdir and stat */
+      }
+    }
+  }
+  stale.sort((a, b) => b.mtime - a.mtime);
+  const batch = stale.slice(0, CATCHUP_CAP).map((s) => s.path);
+  result.scanned = batch.length;
+  if (batch.length) await uploadFiles(batch, cfg, {}, result);
+  return result;
+}
+
+/** SessionStart hook entry: return to Claude Code at once, do the catch-up detached. */
+export async function runCatchUp(): Promise<void> {
+  if (!isDetached()) {
+    const cfg = await loadConfig();
+    if (!isConnected(cfg) || cfg.paused || envOptedOut()) return;
+    if (spawnDetached('catchup')) return;
+  }
+  await catchUp();
 }
 
 /** Upload the history for ONE project, identified by its cwd. A no-op (zero

@@ -1,13 +1,16 @@
 // Parse a Claude Code JSONL transcript into a normalized ParsedSession with
 // learning-oriented stats. Tolerant of unknown line types and format drift.
 import type {
+  AskedQuestion,
   ContentBlock,
   DailyStats,
   ModelUsage,
+  ParseOptions,
   ParsedSession,
   PermissionMode,
   RawEntry,
   SessionStats,
+  SubagentUsage,
   ToolCall,
   Turn,
 } from './types.js';
@@ -16,7 +19,7 @@ import { redactText } from './redact.js';
 
 /** Backfill ledger key: bump this when the parser's output shape changes so old sessions
  *  auto-re-sync instead of being skipped forever. */
-export const PARSER_VERSION = 5;
+export const PARSER_VERSION = 7;
 
 const ARG_CAP = 300;
 
@@ -125,13 +128,50 @@ function cleanUserText(text: string): string {
     .trim();
 }
 
+/** The questions half of an AskUserQuestion call; answers are filled in by applyAnswers(). */
+function askedQuestions(input?: Record<string, unknown>): AskedQuestion[] | undefined {
+  if (!Array.isArray(input?.questions)) return undefined;
+  const out: AskedQuestion[] = [];
+  for (const q of input.questions as Record<string, unknown>[]) {
+    if (typeof q?.question !== 'string') continue;
+    out.push({
+      question: q.question,
+      header: typeof q.header === 'string' ? q.header : undefined,
+      options: Array.isArray(q.options)
+        ? (q.options as { label?: unknown }[])
+            .map((o) => (typeof o?.label === 'string' ? o.label : ''))
+            .filter(Boolean)
+        : [],
+      multiSelect: q.multiSelect === true || undefined,
+    });
+  }
+  return out.length ? out : undefined;
+}
+
+/** Join the user's reply onto the call it answers. Both maps are keyed by question text. */
+function applyAnswers(tc: ToolCall, result: unknown, isError?: boolean) {
+  const r = result && typeof result === 'object' ? (result as Record<string, unknown>) : undefined;
+  const answers = r?.answers as Record<string, unknown> | undefined;
+  const notes = r?.annotations as Record<string, { notes?: unknown } | undefined> | undefined;
+  if (!answers || typeof answers !== 'object') {
+    if (isError) tc.declined = true;
+    return;
+  }
+  for (const q of tc.questions ?? []) {
+    const a = answers[q.question];
+    if (typeof a === 'string' && a) q.answer = a;
+    const n = notes?.[q.question]?.notes;
+    if (typeof n === 'string' && n.trim()) q.notes = n.trim();
+  }
+}
+
 function basename(p?: string): string | undefined {
   if (!p) return undefined;
   const parts = p.replace(/\/+$/, '').split('/');
   return parts[parts.length - 1] || undefined;
 }
 
-export function parseTranscript(jsonl: string): ParsedSession {
+function parseLines(jsonl: string): RawEntry[] {
   const entries: RawEntry[] = [];
   for (const line of jsonl.split('\n')) {
     const t = line.trim();
@@ -142,20 +182,59 @@ export function parseTranscript(jsonl: string): ParsedSession {
       // skip malformed lines rather than failing the whole session
     }
   }
+  return entries;
+}
+
+/** Text of a user line / queued prompt, whether content is a string or blocks. */
+function plainText(content: unknown): string {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return '';
+  return (content as ContentBlock[])
+    .filter((b) => b?.type === 'text' && typeof b.text === 'string')
+    .map((b) => b.text)
+    .join('\n\n');
+}
+
+const INTERRUPT = /^\[Request interrupted by user/;
+const LIMIT_NOTICE = /\b(session|weekly|usage) limit\b/i;
+
+/** Claude-Code-generated assistant lines: API error notices and "No response requested." fillers.
+ *  Not model output — no usage, no model, no turn. */
+const isSynthetic = (e: RawEntry, model?: string): boolean =>
+  model === '<synthetic>' || e.isApiErrorMessage === true;
+
+export function parseTranscript(jsonl: string, opts: ParseOptions = {}): ParsedSession {
+  const entries = parseLines(jsonl);
 
   const turns: Turn[] = [];
   const toolUsage: Record<string, number> = {};
+  const toolErrors: Record<string, number> = {};
+  const toolDenials: Record<string, number> = {};
   const skills = new Set<string>();
   const subagents = new Set<string>();
   const models = new Set<string>();
   const modelUsage: Record<string, ModelUsage> = {};
   const daily: Record<string, DailyStats> = {};
+  // Every tool call by tool_use id, awaiting its tool_result (which arrives in a later user line).
+  const callsById = new Map<string, ToolCall>();
+  // Task/Agent tool_use id -> subagent type, to name a subagent transcript lacking meta.agentType.
+  const agentTypeById = new Map<string, string>();
+  // One API message is written as one assistant line PER content block, all sharing message.id
+  // and carrying the same usage. Usage is counted once per id; the lines merge into one Turn.
+  const seenUsage = new Set<string>();
+  const turnByMessage = new Map<string, Turn>();
 
   let inputTokens = 0;
   let outputTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
   let estimatedCostUsd = 0;
+  let interrupts = 0;
+  let compactions = 0;
+  let apiErrors = 0;
+  let rateLimitHits = 0;
+  // cost-state is cumulative within one process run (keyed by startTime); runs are independent.
+  const costRuns = new Map<number, { costUsd: number; linesAdded: number; linesRemoved: number }>();
 
   let sessionId = '';
   let cwd: string | undefined;
@@ -170,6 +249,38 @@ export function parseTranscript(jsonl: string): ParsedSession {
   const ensureDay = (d: string): DailyStats =>
     (daily[d] ??= { turns: 0, userMessages: 0, totalTokens: 0, costUsd: 0, activeMs: 0 });
 
+  /** Fold one API message's usage into session totals, modelUsage and daily. Returns what it added.
+   *  Shared by the main transcript and subagent transcripts. */
+  const addUsage = (e: RawEntry, model: string | undefined): { tokens: number; cost: number } => {
+    const u = e.message?.usage;
+    const key = e.message?.id ?? e.requestId;
+    if (!u || (key && seenUsage.has(key))) return { tokens: 0, cost: 0 };
+    if (key) seenUsage.add(key);
+    const tokens =
+      (u.input_tokens ?? 0) +
+      (u.output_tokens ?? 0) +
+      (u.cache_read_input_tokens ?? 0) +
+      (u.cache_creation_input_tokens ?? 0);
+    const cost = costForUsage(model, u);
+    inputTokens += u.input_tokens ?? 0;
+    outputTokens += u.output_tokens ?? 0;
+    cacheReadTokens += u.cache_read_input_tokens ?? 0;
+    cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+    estimatedCostUsd += cost;
+
+    const mu = ensureModel(model ?? '(unknown)');
+    mu.totalTokens += tokens;
+    mu.costUsd += cost;
+    mu.inputTokens += u.input_tokens ?? 0;
+    mu.outputTokens += u.output_tokens ?? 0;
+    mu.cacheReadTokens += u.cache_read_input_tokens ?? 0;
+    mu.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
+    const day = e.timestamp?.slice(0, 10);
+    if (day) ensureDay(day).totalTokens += tokens;
+    if (day) ensureDay(day).costUsd += cost;
+    return { tokens, cost };
+  };
+
   // A `type:"user"` line isn't always something a person typed: Claude Code also injects
   // task-notification-style origins, `promptSource:"system"` prompts, and meta lines. All three
   // are excluded from `userMessages`; `suggestion_accepted` stays IN — the human did accept it.
@@ -178,6 +289,16 @@ export function parseTranscript(jsonl: string): ParsedSession {
     e.promptSource !== 'system' &&
     e.isMeta !== true;
   let userMessages = 0;
+
+  // A prompt typed while Claude is mid-turn is logged as a `queued_command` attachment. Usually it
+  // is ALSO replayed later as a normal `user` line; only when it never is does the attachment
+  // stand in for it. Pre-scan so that check is a lookup, not a rescan per attachment.
+  const userTextsAfter: { index: number; text: string }[] = [];
+  entries.forEach((e, index) => {
+    if (e.type === 'user' && e.message) userTextsAfter.push({ index, text: plainText(e.message.content) });
+  });
+  const replayedLater = (index: number, prompt: string): boolean =>
+    userTextsAfter.some((u) => u.index > index && u.text.includes(prompt));
 
   // Permission-mode timeline. `permission-mode` lines carry no timestamp, so file order is the
   // only signal — a `user` line's own `permissionMode` (set only on a human-typed prompt) is the
@@ -201,7 +322,24 @@ export function parseTranscript(jsonl: string): ParsedSession {
     if (lastAssistant.day) ensureDay(lastAssistant.day).activeMs += ms;
   };
 
-  for (const e of entries) {
+  const pushUserTurn = (e: RawEntry, text: string, toolCalls: ToolCall[] = []) => {
+    const day = e.timestamp?.slice(0, 10);
+    if (day) ensureDay(day).turns += 1;
+    if (isGenuineHumanTurn(e)) {
+      userMessages += 1;
+      if (day) ensureDay(day).userMessages += 1;
+    }
+    turns.push({
+      role: 'user',
+      timestamp: e.timestamp,
+      text,
+      toolCalls,
+      isSidechain: e.isSidechain,
+      permissionMode: currentMode,
+    });
+  };
+
+  for (const [index, e] of entries.entries()) {
     if (e.sessionId && !sessionId) sessionId = e.sessionId;
     if (e.cwd && !cwd) cwd = e.cwd;
     if (e.gitBranch && !gitBranch) gitBranch = e.gitBranch;
@@ -216,45 +354,57 @@ export function parseTranscript(jsonl: string): ParsedSession {
     }
     if (e.type === 'system') {
       if (e.subtype === 'turn_duration' && typeof e.durationMs === 'number') addActive(e.durationMs);
+      if (e.subtype === 'compact_boundary') compactions++;
+      continue;
+    }
+    if (e.type === 'cost-state') {
+      if (typeof e.totalCostUSD === 'number') {
+        costRuns.set(e.startTime ?? 0, {
+          costUsd: e.totalCostUSD,
+          linesAdded: e.totalLinesAdded ?? 0,
+          linesRemoved: e.totalLinesRemoved ?? 0,
+        });
+      }
+      continue;
+    }
+    if (e.type === 'attachment') {
+      const a = e.attachment;
+      if (a?.type === 'queued_command' && a.commandMode === 'prompt' && a.origin?.kind === 'human') {
+        const raw = plainText(a.prompt).trim();
+        const text = cleanUserText(raw);
+        if (text && !replayedLater(index, raw)) {
+          if (e.timestamp) timestamps.push(e.timestamp);
+          if (!firstUserPrompt && !SKILL_BODY_PREFIX.test(text)) firstUserPrompt = text;
+          pushUserTurn(e, text);
+        }
+      }
       continue;
     }
     if (e.type !== 'user' && e.type !== 'assistant') continue;
     const msg = e.message;
     if (!msg) continue;
 
+    // Compaction summaries are written as `user` lines but were never typed — drop them outright.
+    if (e.type === 'user' && (e.isCompactSummary || e.isVisibleInTranscriptOnly)) continue;
+
+    const model = msg.model ?? e.model;
+    if (e.type === 'assistant' && isSynthetic(e, model)) {
+      if (e.isApiErrorMessage) {
+        apiErrors++;
+        if (LIMIT_NOTICE.test(plainText(msg.content))) rateLimitHits++;
+      }
+      continue;
+    }
+
     if (e.type === 'user' && e.permissionMode) noteMode(e.permissionMode);
 
     const blocks = asBlocks(msg.content);
-    const model = msg.model ?? e.model;
     if (model) models.add(model);
     if (e.timestamp) timestamps.push(e.timestamp);
     const day = e.timestamp?.slice(0, 10);
 
-    // token accounting (assistant turns carry usage)
-    if (e.type === 'assistant' && msg.usage) {
-      const u = msg.usage;
-      const turnTokens =
-        (u.input_tokens ?? 0) +
-        (u.output_tokens ?? 0) +
-        (u.cache_read_input_tokens ?? 0) +
-        (u.cache_creation_input_tokens ?? 0);
-      const turnCost = costForUsage(model, u);
-      inputTokens += u.input_tokens ?? 0;
-      outputTokens += u.output_tokens ?? 0;
-      cacheReadTokens += u.cache_read_input_tokens ?? 0;
-      cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-      estimatedCostUsd += turnCost;
-
-      const mu = ensureModel(model ?? '(unknown)');
-      mu.totalTokens += turnTokens;
-      mu.costUsd += turnCost;
-      mu.inputTokens += u.input_tokens ?? 0;
-      mu.outputTokens += u.output_tokens ?? 0;
-      mu.cacheReadTokens += u.cache_read_input_tokens ?? 0;
-      mu.cacheCreationTokens += u.cache_creation_input_tokens ?? 0;
-      if (day) ensureDay(day).totalTokens += turnTokens;
-      if (day) ensureDay(day).costUsd += turnCost;
-    }
+    // token accounting (assistant turns carry usage) — once per API message, not per line
+    if (e.type === 'assistant') addUsage(e, model);
 
     const textParts: string[] = [];
     const thinkingParts: string[] = [];
@@ -267,37 +417,70 @@ export function parseTranscript(jsonl: string): ParsedSession {
         toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
         const detail = toolDetail(b.name, b.input);
         if (b.name === 'Skill' && detail) skills.add(detail);
-        if ((b.name === 'Task' || b.name === 'Agent') && detail) subagents.add(detail);
-        toolCalls.push({ name: b.name, detail, args: summarizeToolArgs(b.name, b.input) });
+        if ((b.name === 'Task' || b.name === 'Agent') && detail) {
+          subagents.add(detail);
+          if (b.id) agentTypeById.set(b.id, detail);
+        }
+        const tc: ToolCall = { name: b.name, detail, args: summarizeToolArgs(b.name, b.input) };
+        if (b.name === 'AskUserQuestion') tc.questions = askedQuestions(b.input);
+        if (b.id) callsById.set(b.id, tc);
+        toolCalls.push(tc);
+      } else if (b.type === 'tool_result' && b.tool_use_id && callsById.has(b.tool_use_id)) {
+        const tc = callsById.get(b.tool_use_id)!;
+        callsById.delete(b.tool_use_id);
+        if (tc.name === 'AskUserQuestion') applyAnswers(tc, e.toolUseResult, b.is_error);
+        // A denial also comes back is_error; it's recorded as the denial, not as a tool failure.
+        if (e.toolDenialKind) {
+          tc.denied = e.toolDenialKind;
+          toolDenials[e.toolDenialKind] = (toolDenials[e.toolDenialKind] ?? 0) + 1;
+        } else if (b.is_error) {
+          tc.error = true;
+          toolErrors[tc.name] = (toolErrors[tc.name] ?? 0) + 1;
+        }
       }
-      // tool_result blocks (in user turns) are omitted from the rendered body
+      // tool_result blocks (in user turns) are otherwise omitted from the rendered body
     }
 
     const rawText = textParts.join('\n\n').trim();
     // Strip injected scaffolding from user turns; keep assistant text verbatim.
     const text = e.type === 'user' ? cleanUserText(rawText) : rawText;
 
-    // capture the first real thing the user actually typed — skip injected skill bodies, which
-    // read as documentation, not something worth showing as a session title.
-    if (e.type === 'user' && !firstUserPrompt && text && !SKILL_BODY_PREFIX.test(text)) {
-      firstUserPrompt = text;
+    if (e.type === 'user') {
+      // "[Request interrupted by user…]" is Claude Code's marker, not a message: count, don't render.
+      if (INTERRUPT.test(text)) {
+        interrupts++;
+        continue;
+      }
+      // capture the first real thing the user actually typed — skip injected skill bodies, which
+      // read as documentation, not something worth showing as a session title.
+      if (!firstUserPrompt && text && !SKILL_BODY_PREFIX.test(text)) firstUserPrompt = text;
+      // skip empty turns: pure tool_result carriers, or nothing but injected system content.
+      if (!text && !toolCalls.length) continue;
+      pushUserTurn(e, text, toolCalls);
+      continue;
     }
 
-    // skip empty turns: pure tool_result carriers, or user turns that were
-    // nothing but injected system content.
+    const assistantModel = model ?? '(unknown)';
+    lastAssistant = { model: assistantModel, day };
     if (!text && !thinkingParts.length && !toolCalls.length) continue;
 
-    if (day) ensureDay(day).turns += 1;
-    if (e.type === 'assistant') {
-      ensureModel(model ?? '(unknown)').turns += 1;
-      lastAssistant = { model: model ?? '(unknown)', day };
-    } else if (e.type === 'user' && isGenuineHumanTurn(e)) {
-      userMessages += 1;
-      if (day) ensureDay(day).userMessages += 1;
+    // Later content blocks of an API message already on screen: append to its Turn.
+    const msgKey = msg.id ?? e.requestId;
+    const prior = msgKey ? turnByMessage.get(msgKey) : undefined;
+    if (prior) {
+      if (text) prior.text = prior.text ? `${prior.text}\n\n${text}` : text;
+      if (thinkingParts.length) {
+        const th = thinkingParts.join('\n\n');
+        prior.thinking = prior.thinking ? `${prior.thinking}\n\n${th}` : th;
+      }
+      prior.toolCalls.push(...toolCalls);
+      continue;
     }
 
-    turns.push({
-      role: e.type,
+    if (day) ensureDay(day).turns += 1;
+    ensureModel(assistantModel).turns += 1;
+    const turn: Turn = {
+      role: 'assistant',
       timestamp: e.timestamp,
       model,
       text,
@@ -305,8 +488,38 @@ export function parseTranscript(jsonl: string): ParsedSession {
       toolCalls,
       isSidechain: e.isSidechain,
       permissionMode: currentMode,
-    });
+    };
+    if (msgKey) turnByMessage.set(msgKey, turn);
+    turns.push(turn);
   }
+
+  // Subagent transcripts (`<session>/subagents/agent-*.jsonl`): their API spend is part of this
+  // session's cost, so it folds into totals/modelUsage/daily. Their turns are NOT added to
+  // `turns` (payload size) and don't count toward turns/assistantTurns/modelUsage.turns.
+  const subagentUsage: Record<string, SubagentUsage> = {};
+  for (const sub of opts.subagents ?? []) {
+    const type =
+      sub.meta?.agentType ??
+      (sub.meta?.toolUseId ? agentTypeById.get(sub.meta.toolUseId) : undefined) ??
+      'unknown';
+    const su = (subagentUsage[type] ??= { runs: 0, totalTokens: 0, costUsd: 0, toolCalls: 0 });
+    su.runs += 1;
+    for (const e of parseLines(sub.jsonl)) {
+      if (e.type !== 'assistant' || !e.message) continue;
+      const model = e.message.model ?? e.model;
+      if (isSynthetic(e, model)) continue;
+      if (model) models.add(model);
+      const added = addUsage(e, model);
+      su.totalTokens += added.tokens;
+      su.costUsd += added.cost;
+      for (const b of asBlocks(e.message.content)) {
+        if (b.type !== 'tool_use' || !b.name) continue;
+        toolUsage[b.name] = (toolUsage[b.name] ?? 0) + 1;
+        su.toolCalls += 1;
+      }
+    }
+  }
+  for (const su of Object.values(subagentUsage)) su.costUsd = Math.round(su.costUsd * 10000) / 10000;
 
   // Fallback active-time: only when no turn_duration line existed anywhere in the transcript
   // (older Claude Code versions). Never mixed with measured data, so a session's numbers stay
@@ -338,6 +551,17 @@ export function parseTranscript(jsonl: string): ParsedSession {
 
   const assistantTurns = turns.filter((t) => t.role === 'assistant').length;
 
+  let reported: SessionStats['reported'];
+  if (costRuns.size) {
+    reported = { costUsd: 0, linesAdded: 0, linesRemoved: 0 };
+    for (const r of costRuns.values()) {
+      reported.costUsd += r.costUsd;
+      reported.linesAdded += r.linesAdded;
+      reported.linesRemoved += r.linesRemoved;
+    }
+    reported.costUsd = Math.round(reported.costUsd * 10000) / 10000;
+  }
+
   const stats: SessionStats = {
     turns: turns.length,
     userMessages,
@@ -359,6 +583,14 @@ export function parseTranscript(jsonl: string): ParsedSession {
     modelUsage,
     daily,
     activeMsMeasured,
+    toolErrors,
+    toolDenials,
+    subagentUsage,
+    interrupts,
+    compactions,
+    apiErrors,
+    rateLimitHits,
+    reported,
   };
 
   if (!title) title = firstUserPrompt?.slice(0, 80) || `Session ${sessionId.slice(0, 8)}`;

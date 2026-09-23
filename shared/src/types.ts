@@ -11,6 +11,8 @@ export interface ContentBlock {
   input?: Record<string, unknown>; // tool_use input
   content?: unknown; // tool_result payload
   is_error?: boolean;
+  id?: string; // tool_use: id a later tool_result points back to
+  tool_use_id?: string; // tool_result: the tool_use it answers
 }
 
 /** Token accounting emitted by the API on assistant turns. */
@@ -19,6 +21,9 @@ export interface Usage {
   output_tokens?: number;
   cache_creation_input_tokens?: number;
   cache_read_input_tokens?: number;
+  /** Cache writes split by TTL (priced 1.25× / 2× input). Absent on older transcripts. */
+  cache_creation?: { ephemeral_5m_input_tokens?: number; ephemeral_1h_input_tokens?: number };
+  server_tool_use?: { web_search_requests?: number; web_fetch_requests?: number };
 }
 
 /** Open-ended on purpose: the binary's enum is
@@ -81,7 +86,28 @@ export interface RawEntry {
   /** e.g. `typed`, `system`, `suggestion_accepted`. */
   promptSource?: string;
   isMeta?: boolean;
+  /** Claude Code writes one assistant line per content block; the split lines share
+   *  `message.id` (and `requestId`) and carry IDENTICAL usage — count it once. */
+  requestId?: string;
+  /** Claude-Code-generated assistant line (model `<synthetic>`), e.g. a rate-limit notice. */
+  isApiErrorMessage?: boolean;
+  /** Compaction summary injected as a `user` line — not something the human typed. */
+  isCompactSummary?: boolean;
+  isVisibleInTranscriptOnly?: boolean;
+  /** On a tool_result carrier: why the call was blocked (`user-rejected`, `automode-blocked`, …). */
+  toolDenialKind?: string;
+  /** `type:"attachment"` payload. Only `queued_command` is read (a prompt typed mid-turn). */
+  attachment?: { type?: string; commandMode?: string; prompt?: unknown; origin?: { kind?: string } };
+  /** `type:"cost-state"`: Claude Code's own running cost for one process run (`startTime`). */
+  startTime?: number;
+  totalCostUSD?: number;
+  totalLinesAdded?: number;
+  totalLinesRemoved?: number;
+  /** Structured tool output Claude Code writes beside a tool_result. For AskUserQuestion:
+   *  `{ questions, answers: {question: answer}, annotations: {question: {notes?, preview?}} }`. */
+  toolUseResult?: unknown;
   message?: {
+    id?: string;
     role?: string;
     model?: string;
     content?: string | ContentBlock[];
@@ -108,6 +134,28 @@ export interface ToolCall {
   detail?: string;
   /** Bounded, always-redacted one-line summary of the invocation's input. Purely additive. */
   args?: string;
+  /** AskUserQuestion only: what Claude asked, and what the user picked (parser v6+). */
+  questions?: AskedQuestion[];
+  /** AskUserQuestion only: the user dismissed the prompt instead of answering. */
+  declined?: boolean;
+  /** The tool_result came back `is_error` (and wasn't a denial — see `denied`). Parser v7+. */
+  error?: boolean;
+  /** The call was blocked before running: Claude Code's `toolDenialKind` (`user-rejected`,
+   *  `automode-blocked`, `permission-rule`, …). Parser v7+. */
+  denied?: string;
+}
+
+/** One question from an AskUserQuestion call, joined with the user's reply from its tool_result. */
+export interface AskedQuestion {
+  question: string;
+  header?: string;
+  options: string[];
+  multiSelect?: boolean;
+  /** Claude Code's answer string: an option label, labels joined by ", " (multiSelect), or the
+   *  user's own text when they chose "Other". Absent when unanswered. */
+  answer?: string;
+  /** Free-text note the user attached to their selection. */
+  notes?: string;
 }
 
 /** Aggregated, learning-oriented metrics for one session. */
@@ -140,6 +188,43 @@ export interface SessionStats {
   daily: Record<string, DailyStats>;
   /** false when activeMs across modelUsage came from the capped-gap fallback */
   activeMsMeasured?: boolean;
+  // ── parser v7+ (absent on older rows) ──
+  /** tool name -> calls whose result was an error (denials excluded) */
+  toolErrors?: Record<string, number>;
+  /** toolDenialKind -> count */
+  toolDenials?: Record<string, number>;
+  /** subagent type -> usage from `<session>/subagents/agent-*.jsonl`. Already folded into the
+   *  session's token/cost totals, modelUsage and daily; kept here for the per-agent split. */
+  subagentUsage?: Record<string, SubagentUsage>;
+  /** `[Request interrupted by user…]` lines — not counted as userMessages */
+  interrupts?: number;
+  /** `system` `compact_boundary` lines */
+  compactions?: number;
+  /** Claude-Code-synthesized API error lines (`isApiErrorMessage`) */
+  apiErrors?: number;
+  /** the subset of apiErrors that were session/weekly/usage-limit notices */
+  rateLimitHits?: number;
+  /** Claude Code's own accounting from `cost-state` lines (last per run, summed across runs).
+   *  Absent when the transcript has none. */
+  reported?: { costUsd: number; linesAdded: number; linesRemoved: number };
+}
+
+export interface SubagentUsage {
+  runs: number;
+  totalTokens: number;
+  costUsd: number;
+  toolCalls: number;
+}
+
+/** One subagent transcript to fold into its parent session (parseTranscript's 2nd arg). */
+export interface SubagentTranscript {
+  /** The sibling `agent-*.meta.json`. */
+  meta?: { agentType?: string; description?: string; toolUseId?: string };
+  jsonl: string;
+}
+
+export interface ParseOptions {
+  subagents?: SubagentTranscript[];
 }
 
 /** The normalized, uploadable session document. */

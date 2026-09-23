@@ -11,10 +11,16 @@
 //   • a committed `.claudelens` file           excludes a repo for the WHOLE team
 //   • DO_NOT_TRACK / CLAUDELENS_DISABLE env    honored as a global opt-out
 //
-// backfilled maps session id -> the PARSER_VERSION that last uploaded it, so
-// re-running /claudelens:sync-history skips unchanged old sessions but still
-// re-uploads ones a parser bump can now extract more from — the server itself
-// dedups on (session_id, author) regardless.
+// backfilled maps session id -> the PARSER_VERSION that last uploaded it (0 = a
+// live sync started but never succeeded), and backfilledMtime -> the transcript's
+// mtime at that upload. Both the Stop hook and backfill write them; the
+// SessionStart catch-up (history.ts) re-uploads any ledgered session whose
+// version is behind or whose file has grown since — the server itself dedups
+// on (session_id, author) regardless.
+//
+// Writes are read-modify-write merges (updateConfig): each caller reloads the
+// file and changes only its own keys, so a long backfill can't clobber an
+// untrack/pause made while it ran.
 //
 // Config lives at ~/.claude/claudelens.json (survives plugin updates). Nothing
 // syncs until `server` is set — connecting is the enablement step.
@@ -42,11 +48,14 @@ export interface ClaudeLensConfig {
   ignoreSessions: string[];
   /** Global kill-switch — when true, nothing syncs. */
   paused: boolean;
-  /** Run secret redaction before upload. */
+  /** Run secret redaction before upload. Default true; only an explicit `false` turns it off. */
   redact: boolean;
-  /** Session id -> the PARSER_VERSION that last uploaded it. Lets a future parser
-   *  bump auto-re-sync old sessions instead of skipping them forever. */
+  /** Session id -> the PARSER_VERSION that last uploaded it (0 = attempted, never succeeded).
+   *  Lets a parser bump auto-re-sync old sessions instead of skipping them forever. */
   backfilled: Record<string, number>;
+  /** Session id -> transcript mtimeMs at its last successful upload. A newer file means an
+   *  unsynced tail (offline, or lines written after the final Stop hook). */
+  backfilledMtime: Record<string, number>;
   /** Attach the signed-in account (email/org/etc.) to syncs. Default true; set
    *  false to opt out of sharing identity while still syncing transcripts. */
   shareAccount?: boolean;
@@ -56,8 +65,9 @@ const EMPTY: ClaudeLensConfig = {
   ignoreProjects: [],
   ignoreSessions: [],
   paused: false,
-  redact: false,
+  redact: true,
   backfilled: {},
+  backfilledMtime: {},
 };
 
 /** Old shape had `backfilledSessions: string[]`; ids migrate to version 0 so
@@ -68,38 +78,77 @@ function migrateBackfilled(parsed: Partial<ClaudeLensConfig> & { backfilledSessi
   return {};
 }
 
-export async function loadConfig(): Promise<ClaudeLensConfig> {
+type RawConfig = Partial<ClaudeLensConfig> & { backfilledSessions?: string[] };
+
+/** The file's JSON as-is. Missing file → `{}`; an unreadable/corrupt one throws, so a writer never
+ *  replaces a config it couldn't read with an empty one. */
+async function readRaw(): Promise<RawConfig> {
+  let raw: string;
   try {
-    const raw = await readFile(CONFIG_PATH, 'utf8');
-    const parsed = JSON.parse(raw) as Partial<ClaudeLensConfig> & { backfilledSessions?: string[] };
-    return {
-      name: parsed.name,
-      server: parsed.server ?? process.env.CLAUDELENS_SERVER,
-      token: parsed.token ?? process.env.CLAUDELENS_TOKEN,
-      ignoreProjects: parsed.ignoreProjects ?? [],
-      ignoreSessions: parsed.ignoreSessions ?? [],
-      paused: parsed.paused ?? false,
-      redact: parsed.redact ?? false,
-      backfilled: migrateBackfilled(parsed),
-      shareAccount: parsed.shareAccount,
-    };
-  } catch {
-    // No config file yet — fall back to env so a centrally-provisioned machine
-    // (CLAUDELENS_SERVER/TOKEN) works without ever running connect.
-    return {
-      ...EMPTY,
-      server: process.env.CLAUDELENS_SERVER,
-      token: process.env.CLAUDELENS_TOKEN,
-    };
+    raw = await readFile(CONFIG_PATH, 'utf8');
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return {};
+    throw err;
   }
+  return JSON.parse(raw) as RawConfig;
 }
 
-export async function saveConfig(cfg: ClaudeLensConfig): Promise<void> {
-  // ponytail: atomic rename only, no lock. Parallel hooks can still clobber; add an O_EXCL lock if
-  // that shows up.
-  const tmp = `${CONFIG_PATH}.tmp`;
-  await writeFile(tmp, JSON.stringify(cfg, null, 2) + '\n', 'utf8');
+function normalize(parsed: RawConfig): ClaudeLensConfig {
+  return {
+    name: parsed.name,
+    server: parsed.server,
+    token: parsed.token,
+    ignoreProjects: parsed.ignoreProjects ?? [],
+    ignoreSessions: parsed.ignoreSessions ?? [],
+    paused: parsed.paused ?? false,
+    redact: parsed.redact ?? true,
+    backfilled: migrateBackfilled(parsed),
+    backfilledMtime: parsed.backfilledMtime ?? {},
+    shareAccount: parsed.shareAccount,
+  };
+}
+
+export async function loadConfig(): Promise<ClaudeLensConfig> {
+  let cfg: ClaudeLensConfig;
+  try {
+    cfg = normalize(await readRaw());
+  } catch {
+    cfg = { ...EMPTY, backfilled: {}, backfilledMtime: {} };
+  }
+  // No server in the file — fall back to env so a centrally-provisioned machine
+  // (CLAUDELENS_SERVER/TOKEN) works without ever running connect.
+  cfg.server ??= process.env.CLAUDELENS_SERVER;
+  cfg.token ??= process.env.CLAUDELENS_TOKEN;
+  return cfg;
+}
+
+/**
+ * Read-modify-write: reload the file, apply `mutate` to that fresh copy, write it back atomically.
+ * Callers change only the keys they own, so concurrent hooks/backfills don't clobber each other's
+ * edits (e.g. an untrack made while a long backfill runs). Env-derived server/token are never
+ * persisted, and unknown keys in the file are preserved.
+ */
+export async function updateConfig(mutate: (cfg: ClaudeLensConfig) => void): Promise<ClaudeLensConfig> {
+  // ponytail: no lock — the read→write window is a few ms, not the length of a backfill.
+  const raw = await readRaw();
+  const cfg = normalize(raw);
+  mutate(cfg);
+  const { backfilledSessions: _legacy, ...rest } = raw;
+  const tmp = `${CONFIG_PATH}.${process.pid}.tmp`;
+  await writeFile(tmp, JSON.stringify({ ...rest, ...cfg }, null, 2) + '\n', 'utf8');
   await rename(tmp, CONFIG_PATH);
+  return cfg;
+}
+
+/** Record successful uploads in the ledger: session id -> PARSER_VERSION + transcript mtime. */
+export async function recordSynced(done: Record<string, { version: number; mtime?: number }>): Promise<void> {
+  if (!Object.keys(done).length) return;
+  await updateConfig((cfg) => {
+    for (const [id, { version, mtime }] of Object.entries(done)) {
+      cfg.backfilled[id] = Math.max(cfg.backfilled[id] ?? 0, version);
+      if (mtime !== undefined) cfg.backfilledMtime[id] = Math.max(cfg.backfilledMtime[id] ?? 0, mtime);
+    }
+  });
 }
 
 /** True once the plugin knows where to send — i.e. connect has run (or env is set). */

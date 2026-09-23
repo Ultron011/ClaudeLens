@@ -9,7 +9,7 @@
 import { readdir, readFile, writeFile, unlink, stat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { loadConfig, saveConfig, isExcludedLocally, REPO_MARKER } from './config.js';
+import { loadConfig, updateConfig, isExcludedLocally, REPO_MARKER } from './config.js';
 import { backfillProject } from './history.js';
 
 const PROJECTS_DIR = join(homedir(), '.claude', 'projects');
@@ -87,18 +87,19 @@ export async function runUntrackSession(): Promise<void> {
     return;
   }
   if (!cfg.ignoreSessions.includes(id)) {
-    cfg.ignoreSessions.push(id);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      if (!c.ignoreSessions.includes(id)) c.ignoreSessions.push(id);
+    });
   }
   console.log(`✔ This session (${id.slice(0, 8)}) will not be tracked. Nothing from it is sent to the dashboard.`);
 }
 
 export async function runTrackSession(): Promise<void> {
-  const cfg = await loadConfig();
   const id = await resolveSessionId(positional(), process.cwd());
   if (id) {
-    cfg.ignoreSessions = cfg.ignoreSessions.filter((s) => s !== id);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      c.ignoreSessions = c.ignoreSessions.filter((s) => s !== id);
+    });
   }
   console.log('✔ This session is tracked again (syncs from the next turn).');
 }
@@ -109,8 +110,9 @@ export async function runUntrackProject(): Promise<void> {
   const team = argFlag('--team') || argFlag('--shared');
 
   if (!isExcludedLocally(dir, cfg)) {
-    cfg.ignoreProjects.push(dir);
-    await saveConfig(cfg);
+    await updateConfig((c) => {
+      if (!isExcludedLocally(dir, c)) c.ignoreProjects.push(dir);
+    });
   }
   if (team) {
     await writeFile(
@@ -125,12 +127,12 @@ export async function runUntrackProject(): Promise<void> {
 }
 
 export async function runTrackProject(): Promise<void> {
-  const cfg = await loadConfig();
   const dir = positionalDir();
   const team = argFlag('--team') || argFlag('--shared');
 
-  cfg.ignoreProjects = cfg.ignoreProjects.filter((p) => resolve(p) !== dir);
-  await saveConfig(cfg);
+  await updateConfig((c) => {
+    c.ignoreProjects = c.ignoreProjects.filter((p) => resolve(p) !== dir);
+  });
   if (team) {
     try {
       await unlink(join(dir, REPO_MARKER));
@@ -148,9 +150,9 @@ export async function runTrackProject(): Promise<void> {
 }
 
 async function setPaused(paused: boolean): Promise<void> {
-  const cfg = await loadConfig();
-  cfg.paused = paused;
-  await saveConfig(cfg);
+  await updateConfig((c) => {
+    c.paused = paused;
+  });
   console.log(
     paused
       ? '⏸  Paused — nothing syncs on this machine until /claudelens:resume.'

@@ -6,7 +6,20 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/dist/claudelens.mjs sync"
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/dist/claudelens.mjs sync",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}\"/dist/claudelens.mjs catchup",
+            "timeout": 10
           }
         ]
       }

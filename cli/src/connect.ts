@@ -5,7 +5,7 @@
 // ALSO excludes the connecting session from syncing — so the token itself is
 // never uploaded. Non-interactive: prints a short result for the skill to relay.
 import { resolve } from 'node:path';
-import { loadConfig, saveConfig, resolveName } from './config.js';
+import { updateConfig, resolveName } from './config.js';
 import { readAccount } from './account.js';
 import { backfillProject, listProjects } from './history.js';
 
@@ -42,17 +42,14 @@ export async function runConnect(): Promise<void> {
     process.exit(1);
   }
 
-  const cfg = await loadConfig();
-  cfg.server = args.server.replace(/\/+$/, ''); // trim trailing slash
-  if (args.token) cfg.token = args.token;
-  if (args.name) cfg.name = args.name;
-
-  // Never upload the session where the token was typed.
-  if (args.session && !cfg.ignoreSessions.includes(args.session)) {
-    cfg.ignoreSessions.push(args.session);
-  }
-
-  await saveConfig(cfg);
+  const server = args.server.replace(/\/+$/, ''); // trim trailing slash
+  const cfg = await updateConfig((c) => {
+    c.server = server;
+    if (args.token) c.token = args.token;
+    if (args.name) c.name = args.name;
+    // Never upload the session where the token was typed.
+    if (args.session && !c.ignoreSessions.includes(args.session)) c.ignoreSessions.push(args.session);
+  });
 
   const account = cfg.shareAccount === false ? undefined : await readAccount();
   console.log(`✔ Connected to ${cfg.server} as "${resolveName(cfg, account)}".`);

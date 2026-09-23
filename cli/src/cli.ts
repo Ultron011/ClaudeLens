@@ -11,6 +11,8 @@ async function main() {
   switch (op) {
     case 'sync': // Stop hook
       return (await import('./sync.js')).runSync();
+    case 'catchup': // SessionStart hook: re-sync stale / unsynced sessions in the background
+      return (await import('./history.js')).runCatchUp();
     case 'connect': // /claudelens:connect
       return (await import('./connect.js')).runConnect();
     case 'untrack-session': // /claudelens:untrack
@@ -43,8 +45,8 @@ async function main() {
 }
 
 main().catch((err) => {
-  // The Stop hook must never disrupt a session; swallow sync errors.
-  if (op === 'sync') {
+  // Hooks must never disrupt a session; swallow sync/catch-up errors.
+  if (op === 'sync' || op === 'catchup') {
     if (process.env.CLAUDELENS_DEBUG) console.error('[claudelens sync]', err);
     return;
   }
