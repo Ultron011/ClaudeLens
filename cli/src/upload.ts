@@ -46,6 +46,9 @@ export async function parseSessionFile(path: string): Promise<ParsedSession> {
  * (including `stale: true` — it already holds a newer copy). A tombstoned session/project comes back
  * `200 {ignored, untrack}`; that is recorded in the local opt-out lists and resolves false.
  */
+/** Transient-status retries per upload (backoff 0.5s → 8s). */
+const RETRIES = 5;
+
 export async function uploadSession(
   session: ParsedSession,
   cfg: ClaudeLensConfig,
@@ -61,24 +64,35 @@ export async function uploadSession(
   }
 
   const payload: IngestPayload = { session, author, account };
-  const res = await fetch(`${cfg.server}/api/sessions`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
-  });
+  const body = JSON.stringify(payload);
+  // 429/503 are transient (nginx rate limit during a bulk backfill, a deploy restart): back off
+  // and retry instead of counting the session as failed. Before this, a sync-history run lost a
+  // quarter of its uploads to the rate limit.
+  let res: Response | undefined;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`${cfg.server}/api/sessions`, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        ...(cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}),
+      },
+      body,
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS),
+    });
+    if ((res.status !== 429 && res.status !== 503) || attempt >= RETRIES) break;
+    const retryAfter = Number(res.headers.get('retry-after'));
+    const waitMs = retryAfter > 0 ? retryAfter * 1000 : 500 * 2 ** attempt + Math.random() * 250;
+    await new Promise((r) => setTimeout(r, Math.min(waitMs, 10_000)));
+  }
   if (!res.ok) throw new Error(`server responded ${res.status}`);
 
   // A deleted session/project is tombstoned server-side; the server tells us
   // here instead of a 4xx (fire-and-forget hook) so we stop re-uploading it.
-  const body = (await res.json().catch(() => undefined)) as
+  const reply = (await res.json().catch(() => undefined)) as
     | { ignored?: boolean; untrack?: { sessionId?: string; cwd?: string } }
     | undefined;
-  if (body?.ignored) {
-    const { sessionId, cwd } = body.untrack ?? {};
+  if (reply?.ignored) {
+    const { sessionId, cwd } = reply.untrack ?? {};
     if (sessionId || cwd) {
       await updateConfig((c) => {
         if (sessionId && !c.ignoreSessions.includes(sessionId)) c.ignoreSessions.push(sessionId);

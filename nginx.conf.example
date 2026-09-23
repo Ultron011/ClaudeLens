@@ -7,12 +7,44 @@
 # 4. sudo certbot --nginx -d your-domain.com
 #    Certbot rewrites this block for TLS on 443 and sets up auto-renewal.
 
+# Rate limits: the dashboard API shares a modest per-IP budget; ingest (token-gated) gets its own
+# looser zone and queues rather than rejects, since a plugin backfill uploads hundreds in a row.
+limit_req_zone $binary_remote_addr zone=claudelens_api:10m rate=15r/s;
+limit_req_zone $binary_remote_addr zone=claudelens_ingest:1m rate=50r/s;
+limit_req_status 429;
+
 server {
     listen 80;
     server_name claudelens-dashboard.drmalpani.com;
 
     # Transcripts can be up to 25 MB — without this, large syncs return 413.
     client_max_body_size 30m;
+
+    add_header Strict-Transport-Security "max-age=31536000" always;
+
+    gzip on;
+    gzip_proxied any;
+    gzip_vary on;
+    gzip_min_length 1024;
+    gzip_types application/json application/javascript text/css image/svg+xml;
+
+    location = /api/sessions {
+        limit_req zone=claudelens_ingest burst=200;
+        proxy_pass         http://127.0.0.1:4000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
+
+    location /api/ {
+        limit_req zone=claudelens_api burst=60 nodelay;
+        proxy_pass         http://127.0.0.1:4000;
+        proxy_set_header   Host              $host;
+        proxy_set_header   X-Real-IP         $remote_addr;
+        proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header   X-Forwarded-Proto $scheme;
+    }
 
     location / {
         proxy_pass         http://127.0.0.1:4000;

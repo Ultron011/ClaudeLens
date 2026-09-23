@@ -822,19 +822,27 @@ async function uploadSession(session, cfg, author, account) {
     }
   }
   const payload = { session, author, account };
-  const res = await fetch(`${cfg.server}/api/sessions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
-    },
-    body: JSON.stringify(payload),
-    signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS)
-  });
+  const body = JSON.stringify(payload);
+  let res;
+  for (let attempt = 0; ; attempt++) {
+    res = await fetch(`${cfg.server}/api/sessions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        ...cfg.token ? { authorization: `Bearer ${cfg.token}` } : {}
+      },
+      body,
+      signal: AbortSignal.timeout(UPLOAD_TIMEOUT_MS)
+    });
+    if (res.status !== 429 && res.status !== 503 || attempt >= RETRIES) break;
+    const retryAfter = Number(res.headers.get("retry-after"));
+    const waitMs = retryAfter > 0 ? retryAfter * 1e3 : 500 * 2 ** attempt + Math.random() * 250;
+    await new Promise((r) => setTimeout(r, Math.min(waitMs, 1e4)));
+  }
   if (!res.ok) throw new Error(`server responded ${res.status}`);
-  const body = await res.json().catch(() => void 0);
-  if (body?.ignored) {
-    const { sessionId, cwd } = body.untrack ?? {};
+  const reply = await res.json().catch(() => void 0);
+  if (reply?.ignored) {
+    const { sessionId, cwd } = reply.untrack ?? {};
     if (sessionId || cwd) {
       await updateConfig((c) => {
         if (sessionId && !c.ignoreSessions.includes(sessionId)) c.ignoreSessions.push(sessionId);
@@ -845,13 +853,14 @@ async function uploadSession(session, cfg, author, account) {
   }
   return true;
 }
-var UPLOAD_TIMEOUT_MS;
+var UPLOAD_TIMEOUT_MS, RETRIES;
 var init_upload = __esm({
   "src/upload.ts"() {
     "use strict";
     init_src();
     init_config();
     UPLOAD_TIMEOUT_MS = 15e3;
+    RETRIES = 5;
   }
 });
 
